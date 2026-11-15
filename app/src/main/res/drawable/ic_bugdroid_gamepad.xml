@@ -1,0 +1,83 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Modern Dark Background with Rounded Aesthetics -->
+    <path
+        android:fillColor="#0B1320"
+        android:pathData="M0,0h108v108h-108z"/>
+
+    <!-- Subtle Outer Glow Ring -->
+    <path
+        android:strokeColor="#1E2D48"
+        android:strokeWidth="2"
+        android:pathData="M54,12 A42,42 0 1,0 54,96 A42,42 0 1,0 54,12"/>
+
+    <!-- Perfectly Centered Icon Group (Geometry center: x=48, y=44.5 -> translate to 54, 54) -->
+    <group
+        android:translateX="6"
+        android:translateY="10">
+
+        <!-- Antennas with Rounded Caps -->
+        <path
+            android:strokeColor="#3DDC84"
+            android:strokeWidth="4"
+            android:strokeLineCap="round"
+            android:pathData="M31,14 L23,4 M65,14 L73,4"/>
+
+        <!-- Bugdroid Head Base -->
+        <path
+            android:fillColor="#3DDC84"
+            android:pathData="M16,40 C16,22.3 30.3,8 48,8 C65.7,8 80,22.3 80,40 Z"/>
+
+        <!-- Eyes -->
+        <path
+            android:fillColor="#0B1320"
+            android:pathData="M34,25 A3.5,3.5 0 1,0 34,25.01 M62,25 A3.5,3.5 0 1,0 62,25.01"/>
+
+        <!-- Gamepad Controller Body with Sleek Dark Ceramic Look -->
+        <path
+            android:fillColor="#151F32"
+            android:strokeColor="#3DDC84"
+            android:strokeWidth="3.2"
+            android:strokeLineJoin="round"
+            android:pathData="M16,42 L80,42 C87,42 91,48 89,58 L83,78 C81,84 73,86 67,80 L58,72 L38,72 L29,80 C23,86 15,84 13,78 L7,58 C5,48 9,42 16,42 Z"/>
+
+        <!-- Gamepad Inner Grip Accents -->
+        <path
+            android:strokeColor="#1E2D48"
+            android:strokeWidth="1.5"
+            android:pathData="M20,48 L76,48"/>
+
+        <!-- D-Pad (Left) with Clean Cross Shape -->
+        <path
+            android:fillColor="#3DDC84"
+            android:pathData="M27,51 h6 v6 h-6 z M21,57 h18 v6 h-18 z M27,63 h6 v6 h-6 z"/>
+
+        <!-- D-Pad Center Core -->
+        <path
+            android:fillColor="#22C55E"
+            android:pathData="M28,58 h4 v4 h-4 z"/>
+
+        <!-- Action Buttons (Right) in Diamond Cluster -->
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M68,52 A3.2,3.2 0 1,0 68,52.01"/>
+        <path
+            android:fillColor="#F43F5E"
+            android:pathData="M76,58 A3.2,3.2 0 1,0 76,58.01"/>
+        <path
+            android:fillColor="#F59E0B"
+            android:pathData="M60,58 A3.2,3.2 0 1,0 60,58.01"/>
+        <path
+            android:fillColor="#3DDC84"
+            android:pathData="M68,64 A3.2,3.2 0 1,0 68,64.01"/>
+
+        <!-- Center Start / Select / Menu Buttons -->
+        <path
+            android:fillColor="#64748B"
+            android:pathData="M42,58 A2,2 0 1,0 42,58.01 M54,58 A2,2 0 1,0 54,58.01"/>
+    </group>
+</vector>

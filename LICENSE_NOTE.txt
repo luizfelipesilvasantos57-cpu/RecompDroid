@@ -1,0 +1,1 @@
+Inspirado no RecompLauncher (GPL v3, github.com/elripalda/RecompLauncher). Se reutilizar código dele, este projeto deve ser GPL v3 também.
