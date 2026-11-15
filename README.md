@@ -16,31 +16,8 @@ O catálogo é obtido do [DecompBuddy](https://decompbuddy.com/). As páginas, c
 
 - Android 8.0 (API 26) ou superior.
 - Conexão com a internet para consultar o catálogo e baixar APKs.
-- Para compilar: Android Studio, JDK 17 e Android SDK 35.
 
 Na primeira instalação de um APK baixado pelo app, o Android pode pedir que você permita a instalação de apps de fontes desconhecidas para o RecompDroid.
-
-## Compilar
-
-Abra o projeto no Android Studio e execute a configuração **app**; ou use o Gradle Wrapper na raiz do projeto:
-
-**Windows (PowerShell):**
-
-```powershell
-.\gradlew.bat :app:assembleDebug
-```
-
-**Linux/macOS:**
-
-```bash
-./gradlew :app:assembleDebug
-```
-
-O APK de depuração é gerado em:
-
-```
-app/build/outputs/apk/debug/app-debug.apk
-```
 
 ## Fontes
 
