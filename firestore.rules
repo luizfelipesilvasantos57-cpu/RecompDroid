@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedInAs(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validProfile(data) {
+      return data.keys().hasOnly(['displayName', 'username', 'photoBase64', 'updatedAt'])
+        && data.keys().hasAll(['displayName', 'username', 'updatedAt'])
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 60
+        && data.username is string
+        && data.username.matches('^[A-Za-z0-9_.]{3,24}$')
+        && data.updatedAt is timestamp
+        && (!('photoBase64' in data)
+          || (data.photoBase64 is string && data.photoBase64.size() <= 700000));
+    }
+
+    function validGameProgress(data) {
+      return data.keys().hasOnly(['title', 'playSeconds', 'launches', 'lastPlayedAt'])
+        && data.keys().hasAll(['title', 'playSeconds', 'launches', 'lastPlayedAt'])
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 160
+        && data.playSeconds is int
+        && data.playSeconds >= 0
+        && data.playSeconds <= 315360000
+        && data.launches is int
+        && data.launches >= 0
+        && data.launches <= 1000000
+        && data.lastPlayedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get, list: if signedInAs(userId);
+      allow create, update: if signedInAs(userId) && validProfile(request.resource.data);
+      allow delete: if false;
+
+      match /games/{gameId} {
+        allow get, list: if signedInAs(userId);
+        allow create, update: if signedInAs(userId) && validGameProgress(request.resource.data);
+        allow delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

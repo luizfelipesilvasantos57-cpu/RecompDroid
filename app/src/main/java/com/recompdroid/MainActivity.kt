@@ -4,10 +4,25 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Patterns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +35,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,6 +49,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,7 +58,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -56,6 +77,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -67,6 +89,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -80,6 +103,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -93,11 +117,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -105,6 +134,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import coil.compose.AsyncImage
+import com.google.firebase.auth.FirebaseAuthException
+import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -115,12 +146,32 @@ object L10n {
     fun t(pt: String, en: String, lang: Int): String = if (lang == 1) en else pt
 }
 
+private fun platformFilterGroup(platform: String): String {
+    val name = platform.lowercase()
+    return when {
+        name.contains("pc") || name.contains("windows") || name.contains("linux") ||
+            name.contains("macintosh") || name.contains("amiga") || name.contains("commodore") ||
+            name.contains("flash") -> "PC"
+        name.contains("nintendo") || name.contains("game boy") || name == "gba" ||
+            name == "nes" || name == "snes" || name == "n64" -> "Nintendo"
+        name.contains("playstation") || name.startsWith("ps ") || name == "psp" ||
+            name.contains("ps vita") -> "PlayStation"
+        name.contains("sega") || name.contains("dreamcast") || name.contains("mega drive") ||
+            name.contains("genesis") || name.contains("saturn") -> "Sega"
+        name.contains("xbox") -> "Xbox"
+        else -> "Outros"
+    }
+}
+
 class MainActivity : ComponentActivity() {
+    private lateinit var appStore: Store
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        appStore = Store(this)
         enableEdgeToEdge()
         setContent {
-            val store = remember { Store(this) }
+            val store = remember { appStore }
             var themeKey by remember { mutableIntStateOf(0) }
 
             RecompDroidTheme(store = store, themeKey = themeKey) {
@@ -132,6 +183,23 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::appStore.isInitialized) {
+            val session = appStore.finishPendingPlay()
+            if (session != null) {
+                val elapsed = ((System.currentTimeMillis() - session.startedAt) / 1000L).coerceIn(1L, 86_400L)
+                session.uid?.let { CloudProfileStore().recordPlay(it, session.slug, session.title, elapsed) }
+            }
+        }
+    }
+
+    private fun launchTrackedGame(context: android.content.Context, store: Store, slug: String, title: String, intent: Intent) {
+        val uid = AuthService.create(context)?.currentUser?.uid
+        store.beginPlay(uid, slug, title)
+        context.startActivity(intent)
     }
 
     @Composable
@@ -169,8 +237,8 @@ class MainActivity : ComponentActivity() {
                             secondary = primaryColor.copy(alpha = 0.8f),
                             tertiary = Color(0xFF38BDF8),
                             background = if (isOled) Color.Black else Color(0xFF0F172A),
-                            surface = if (isOled) Color(0xFF070B12) else Color(0xFF1E293B),
-                            surfaceVariant = if (isOled) Color(0xFF131A27) else Color(0xFF283548),
+                            surface = if (isOled) Color(0xFF080809) else Color(0xFF1E293B),
+                            surfaceVariant = if (isOled) Color(0xFF151517) else Color(0xFF283548),
                         )
                     } else {
                         lightColorScheme(
@@ -217,8 +285,28 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
         val lang = store.language
-
+        val accountAuth = remember(context) { AuthService.create(context) }
+        var accountUser by remember(accountAuth) { mutableStateOf(accountAuth?.currentUser) }
+        var profilePhotoBase64 by remember { mutableStateOf<String?>(null) }
+        var accountActionRequest by remember { mutableIntStateOf(0) }
         var tab by remember { mutableIntStateOf(0) } // 0: Discover, 1: Platforms, 2: Installed, 3: Settings
+
+        DisposableEffect(accountAuth) {
+            val listener = accountAuth?.addAuthStateListener { accountUser = it }
+            onDispose { if (listener != null) accountAuth?.removeAuthStateListener(listener) }
+        }
+
+        LaunchedEffect(tab, accountUser?.uid) {
+            val uid = accountUser?.uid
+            if (tab == 0 && uid != null) {
+                CloudProfileStore().loadProfile(uid) { data, _ ->
+                    profilePhotoBase64 = data?.get("photoBase64") as? String
+                }
+            } else if (uid == null) {
+                profilePhotoBase64 = null
+            }
+        }
+
         var games by remember { mutableStateOf<List<Game>>(emptyList()) }
         var isLoading by remember { mutableStateOf(true) }
         var error by remember { mutableStateOf<String?>(null) }
@@ -228,6 +316,19 @@ class MainActivity : ComponentActivity() {
         var selectedGame by remember { mutableStateOf<Game?>(null) }
         var pendingInstallGame by remember { mutableStateOf<Game?>(null) }
         var rev by remember { mutableIntStateOf(0) }
+        val currentReleaseVersion = remember(context) {
+            runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: "0.0.2"
+        }
+        var showReleaseNotes by remember(store, currentReleaseVersion) {
+            mutableStateOf(store.lastSeenReleaseNotesVersion != currentReleaseVersion)
+        }
+
+        fun dismissReleaseNotes() {
+            store.lastSeenReleaseNotesVersion = currentReleaseVersion
+            showReleaseNotes = false
+        }
 
         // Download / Install state per game
         var activeDownloadSlug by remember { mutableStateOf<String?>(null) }
@@ -326,6 +427,95 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        if (showReleaseNotes) {
+            AlertDialog(
+                onDismissRequest = ::dismissReleaseNotes,
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.padding(10.dp).size(24.dp),
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(L10n.t("Novidades", "What's new", lang), fontWeight = FontWeight.Bold)
+                            Text(
+                                L10n.t("RecompDroid 0.0.2", "RecompDroid 0.0.2", lang),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Text(
+                            L10n.t("De 0.0.1 para 0.0.2: veja o que chegou nesta versão.", "From 0.0.1 to 0.0.2: here is what is new in this release.", lang),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        listOf(
+                            L10n.t("Catálogo Android atualizado", "Updated Android catalog", lang) to
+                                L10n.t("Jogos compatíveis com Android, capas e repositórios revisados com dados do DecompBuddy.", "Android-compatible games, covers, and repositories refreshed with DecompBuddy data.", lang),
+                            L10n.t("Recomps agrupados por jogo", "Recomps grouped by game", lang) to
+                                L10n.t("Cada jogo aparece em um único cartão. Quando há várias versões, o contador abre a escolha do recomp para instalar.", "Each game appears in one card. When several versions are available, the count opens a picker to choose which recomp to install.", lang),
+                            L10n.t("Instalação com controle", "More installation control", lang) to
+                                L10n.t("Fluxo de download e instalação de APK aprimorado, com progresso e opção de cancelar.", "Improved APK download and installation flow, with progress and a cancel option.", lang),
+                            L10n.t("Busca e navegação melhores", "Improved search and browsing", lang) to
+                                L10n.t("Ports de PC aparecem primeiro, consoles mais recentes vêm antes e as categorias solicitadas foram removidas.", "PC ports appear first, newer consoles come before older ones, and the requested categories were removed.", lang),
+                            L10n.t("Visual renovado", "Refreshed look", lang) to
+                                L10n.t("Ícone e identidade RecompDroid atualizados, com cabeçalho, cartões e telas de configurações mais limpos.", "Updated RecompDroid icon and identity, with a cleaner header, cards, and settings screens.", lang),
+                            L10n.t("Conta e segurança", "Account and security", lang) to
+                                L10n.t("Login e cadastro por e-mail, verificação de endereço, recuperação de senha e controle para mostrar ou ocultar a senha.", "Email sign-in and registration, address verification, password recovery, and show-or-hide password controls.", lang),
+                            L10n.t("Relato de bugs", "Bug reports", lang) to
+                                L10n.t("Atalho na tela inicial para enviar relatos diretamente ao GitHub.", "A home-screen shortcut opens GitHub to report bugs.", lang),
+                        ).forEach { (heading, description) ->
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.padding(4.dp).size(16.dp),
+                                    )
+                                }
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(heading, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                    Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = ::dismissReleaseNotes) {
+                        Text(L10n.t("Entendi", "Got it", lang))
+                    }
+                },
+            )
+        }
+
         pendingInstallGame?.let { game ->
             RecompPickerDialog(
                 game = game,
@@ -358,39 +548,39 @@ class MainActivity : ComponentActivity() {
                         containerColor = MaterialTheme.colorScheme.surface,
                     ),
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Centered & Modernized App Icon Badge
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(RoundedCornerShape(11.dp))
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_bugdroid_gamepad),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(28.dp),
-                                    tint = Color.Unspecified,
-                                )
-                            }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().offset(x = (-12).dp),                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.recompdroid_logo),
+                                contentDescription = null,
+                                modifier = Modifier.size(88.dp),
+                            )
                             Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    text = when (tab) {
-                                        1 -> L10n.t("Plataformas", "Platforms", lang)
-                                        2 -> L10n.t("Instalados", "Installed", lang)
-                                        3 -> L10n.t("Ajustes", "Settings", lang)
-                                        else -> "RecompDroid"
-                                    },
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 18.sp,
-                                )
+                            Column(modifier = Modifier.weight(1f)) {
+                                if (tab == 0) {
+                                    Row {
+                                        Text("Recomp", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                                        Text("Droid", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = MaterialTheme.colorScheme.primary, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                                    }
+                                } else {
+                                    Text(
+                                        text = when (tab) {
+                                            1 -> L10n.t("Plataformas", "Platforms", lang)
+                                            2 -> L10n.t("Instalados", "Installed", lang)
+                                            else -> L10n.t("Ajustes", "Settings", lang)
+                                        },
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 18.sp,
+                                    )
+                                }
                                 if (tab == 0 && games.isNotEmpty()) {
                                     Text(
                                         text = "${games.size} ${L10n.t("recomps catalogados (A-Z)", "recomps cataloged (A-Z)", lang)}",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
@@ -408,8 +598,31 @@ class MainActivity : ComponentActivity() {
                             IconButton(onClick = { loadCatalog() }) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Recarregar")
                             }
-                        }
-                        if (tab != 3) {
+                            IconButton(onClick = { tab = 3; accountActionRequest++ }) {
+                                Surface(
+                                    modifier = Modifier.size(40.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                ) {
+                                    val photo = profilePhotoBase64
+                                    if (!photo.isNullOrBlank()) {
+                                        AsyncImage(
+                                            model = "data:image/jpeg;base64,$photo",
+                                            contentDescription = L10n.t("Abrir perfil", "Open profile", lang),
+                                            modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                            contentScale = ContentScale.Crop,
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Person,
+                                            contentDescription = L10n.t("Entrar ou abrir perfil", "Sign in or open profile", lang),
+                                            modifier = Modifier.padding(8.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        } else if (tab != 3) {
                             IconButton(onClick = { tab = 3 }) {
                                 Icon(Icons.Default.Settings, contentDescription = "Configurações")
                             }
@@ -455,7 +668,7 @@ class MainActivity : ComponentActivity() {
                     .fillMaxSize(),
             ) {
                 when (tab) {
-                    3 -> SettingsScreen(store = store, onApplyChanges = onThemeApply)
+                    3 -> SettingsScreen(store = store, onApplyChanges = onThemeApply, accountActionRequest = accountActionRequest)
                     1 -> PlatformScreen(
                         games = games,
                         store = store,
@@ -478,7 +691,8 @@ class MainActivity : ComponentActivity() {
                             .filter { (slug, title, subtitle, _, platform) ->
                                 val matchesTab = if (tab == 2) slug in installedSet else true
                                 val matchesFav = if (onlyFavorites) store.isFavorite(slug) else true
-                                val matchesPlat = if (selectedPlatformFilter != null) platform == selectedPlatformFilter else true
+                                val matchesPlat = selectedPlatformFilter == null ||
+                                    platform?.let(::platformFilterGroup) == selectedPlatformFilter
                                 val matchesQuery = query.isBlank() || title.contains(query, ignoreCase = true) ||
                                         (subtitle?.contains(query, ignoreCase = true) == true)
 
@@ -517,7 +731,7 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 8.dp, bottom = 8.dp),
-                                    placeholder = { Text(L10n.t("Buscar recompilações e jogos...", "Search recompilations & games...", lang)) },
+                                    placeholder = { Text(L10n.t("Buscar jogos...", "Search for games...", lang)) },
                                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                                     trailingIcon = {
                                         if (query.isNotEmpty()) {
@@ -527,12 +741,21 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     singleLine = true,
-                                    shape = RoundedCornerShape(20.dp),
+                                    shape = RoundedCornerShape(28.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = Color(0xFF19191B),
+                                        unfocusedContainerColor = Color(0xFF19191B),
+                                        focusedBorderColor = Color.Transparent,
+                                        unfocusedBorderColor = Color.Transparent,
+                                    ),
                                 )
 
-                                // Platform filter chips row with extended consoles
                                 val platformOptions = remember(games) {
-                                    Catalog.sortPlatforms(games.mapNotNull { it.platform })
+                                    val groups = games.mapNotNull { it.platform }
+                                        .map(::platformFilterGroup)
+                                        .toSet()
+                                    listOf("PC", "Nintendo", "PlayStation", "Sega", "Xbox", "Outros")
+                                        .filter { it in groups }
                                 }
                                 LazyRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -545,15 +768,36 @@ class MainActivity : ComponentActivity() {
                                             selected = selectedPlatformFilter == null,
                                             onClick = { selectedPlatformFilter = null },
                                             label = { Text(L10n.t("Todos", "All", lang)) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                containerColor = Color(0xFF111113),
+                                                labelColor = Color.White,
+                                                selectedContainerColor = Color(0xFF58E68A),
+                                                selectedLabelColor = Color.Black,
+                                            ),
                                         )
                                     }
-                                    items(platformOptions) { plat ->
+                                    items(platformOptions) { platformGroup ->
                                         FilterChip(
-                                            selected = selectedPlatformFilter == plat,
+                                            selected = selectedPlatformFilter == platformGroup,
                                             onClick = {
-                                                selectedPlatformFilter = if (selectedPlatformFilter == plat) null else plat
+                                                selectedPlatformFilter =
+                                                    if (selectedPlatformFilter == platformGroup) null else platformGroup
                                             },
-                                            label = { Text(plat) },
+                                            label = {
+                                                Text(
+                                                    when (platformGroup) {
+                                                        "PC" -> L10n.t("PC", "PC", lang)
+                                                        "Outros" -> L10n.t("Outros", "Other", lang)
+                                                        else -> platformGroup
+                                                    },
+                                                )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                containerColor = Color(0xFF111113),
+                                                labelColor = Color.White,
+                                                selectedContainerColor = Color(0xFF58E68A),
+                                                selectedLabelColor = Color.Black,
+                                            ),
                                         )
                                     }
                                 }
@@ -605,14 +849,13 @@ class MainActivity : ComponentActivity() {
                                     columns = GridCells.Fixed(2),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                                    contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
+                                    contentPadding = PaddingValues(top = 4.dp, bottom = if (tab == 0) 88.dp else 24.dp),
                                     modifier = Modifier.fillMaxSize(),
                                 ) {
                                     items(filteredList, key = { it.slug }) { g ->
                                         GameGridCard(
                                             game = g,
                                             store = store,
-                                            installedTag = store.tag(g.slug),
                                             isDownloading = activeDownloadSlug == g.slug,
                                             downloadProgress = downloadProgress,
                                             onCancelDownload = ::cancelDownload,
@@ -628,7 +871,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 LazyColumn(
                                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                                    contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
+                                    contentPadding = PaddingValues(top = 4.dp, bottom = if (tab == 0) 88.dp else 24.dp),
                                     modifier = Modifier.fillMaxSize(),
                                 ) {
                                     items(filteredList, key = { it.slug }) { g ->
@@ -651,6 +894,36 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
+                AnimatedVisibility(
+                    visible = tab == 0,
+                    enter = if (store.animationsEnabled) fadeIn(tween(220)) + slideInVertically(tween(220)) { it / 3 } else EnterTransition.None,
+                    exit = if (store.animationsEnabled) fadeOut(tween(150)) + slideOutVertically(tween(150)) { it / 3 } else ExitTransition.None,
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                ) {
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        Intent.ACTION_VIEW,
+                                        "https://github.com/luizfelipesilvasantos57-cpu/RecompDroid/issues/new".toUri(),
+                                    ),
+                                )
+                            }.onFailure {
+                                Toast.makeText(
+                                    context,
+                                    L10n.t("Não foi possível abrir o navegador.", "Could not open the browser.", lang),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp),
+                        icon = { Icon(Icons.Default.Warning, contentDescription = null) },
+                        text = { Text(L10n.t("Relatar bug", "Report bug", lang)) },
+                    )
                 }
             }
         }
@@ -757,11 +1030,23 @@ class MainActivity : ComponentActivity() {
 
         val shapeRadius = getCardShape(store.cardCornerRadius)
         val isFavorite = store.isFavorite(game.slug)
+        val favoriteScale by animateFloatAsState(
+            targetValue = if (isFavorite) 1.2f else 1f,
+            animationSpec = if (store.animationsEnabled) spring(dampingRatio = Spring.DampingRatioMediumBouncy) else snap(),
+            label = "favorite-scale-${game.slug}",
+        )
+        val coverScale = when (store.coverSize) { 0 -> 0.82f; 2 -> 1.14f; else -> 1f }
         val isPkgInstalled = remember(game.slug, installedTag) { store.isAppInstalled(game.slug) }
 
+        AnimatedVisibility(
+            visible = true,
+            enter = if (store.animationsEnabled) {
+                fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 14 }
+            } else EnterTransition.None,
+        ) {
         ElevatedCard(
             onClick = onClick,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = if (store.animationsEnabled) Modifier.fillMaxWidth().animateContentSize(tween(220)) else Modifier.fillMaxWidth(),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
             shape = RoundedCornerShape(shapeRadius),
             colors = CardDefaults.elevatedCardColors(
@@ -778,8 +1063,8 @@ class MainActivity : ComponentActivity() {
                 Box(
                     modifier = Modifier
                         .size(
-                            width = if (store.isCompactCard) 68.dp else 84.dp,
-                            height = if (store.isCompactCard) 92.dp else 114.dp,
+                            width = (if (store.isCompactCard) 68.dp else 84.dp) * coverScale,
+                            height = (if (store.isCompactCard) 92.dp else 114.dp) * coverScale,
                         )
                         .clip(RoundedCornerShape(12.dp))
                         .background(
@@ -855,7 +1140,7 @@ class MainActivity : ComponentActivity() {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = game.title + if (game.recomps.size > 1) " (${game.recomps.size} recomps)" else "",
+                            text = game.title,
                             style = if (store.isCompactCard) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
@@ -870,7 +1155,7 @@ class MainActivity : ComponentActivity() {
                             Icon(
                                 imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                                 contentDescription = "Favorito",
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(18.dp).graphicsLayer { scaleX = favoriteScale; scaleY = favoriteScale },
                                 tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -902,6 +1187,19 @@ class MainActivity : ComponentActivity() {
                             border = null,
                             modifier = Modifier.height(24.dp),
                         )
+
+                        if (game.recomps.size > 1) {
+                            AssistChip(
+                                onClick = onInstallClick,
+                                label = { Text("${game.recomps.size} recomps", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                    labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
+                                border = null,
+                                modifier = Modifier.height(24.dp),
+                            )
+                        }
 
                         if (isPkgInstalled) {
                             AssistChip(
@@ -965,7 +1263,7 @@ class MainActivity : ComponentActivity() {
                                     val pkg = store.pkg(game.slug)
                                     if (pkg != null) {
                                         context.packageManager.getLaunchIntentForPackage(pkg)?.let {
-                                            context.startActivity(it)
+                                            launchTrackedGame(context, store, game.slug, game.title, it)
                                         }
                                     }
                                 },
@@ -1010,6 +1308,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        }
     }
 
     /**
@@ -1020,7 +1319,6 @@ class MainActivity : ComponentActivity() {
     fun GameGridCard(
         game: Game,
         store: Store,
-        installedTag: String?,
         isDownloading: Boolean,
         downloadProgress: Float,
         onCancelDownload: () -> Unit,
@@ -1028,7 +1326,6 @@ class MainActivity : ComponentActivity() {
         onFavoriteClick: () -> Unit,
         onClick: () -> Unit,
     ) {
-        val context = LocalContext.current
         val lang = store.language
 
         var resolvedCoverUrl by remember(game.slug) {
@@ -1048,11 +1345,22 @@ class MainActivity : ComponentActivity() {
 
         val shapeRadius = getCardShape(store.cardCornerRadius)
         val isFavorite = store.isFavorite(game.slug)
-        val isPkgInstalled = remember(game.slug, installedTag) { store.isAppInstalled(game.slug) }
+        val favoriteScale by animateFloatAsState(
+            targetValue = if (isFavorite) 1.2f else 1f,
+            animationSpec = if (store.animationsEnabled) spring(dampingRatio = Spring.DampingRatioMediumBouncy) else snap(),
+            label = "favorite-scale-${game.slug}",
+        )
+        val gridCoverRatio = when (store.coverSize) { 0 -> 0.98f; 2 -> 0.74f; else -> 0.86f }
 
+        AnimatedVisibility(
+            visible = true,
+            enter = if (store.animationsEnabled) {
+                fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 14 }
+            } else EnterTransition.None,
+        ) {
         ElevatedCard(
             onClick = onClick,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = if (store.animationsEnabled) Modifier.fillMaxWidth().animateContentSize(tween(220)) else Modifier.fillMaxWidth(),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
             shape = RoundedCornerShape(shapeRadius),
             colors = CardDefaults.elevatedCardColors(
@@ -1063,7 +1371,7 @@ class MainActivity : ComponentActivity() {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 11f)
+                        .aspectRatio(gridCoverRatio)
                         .clip(RoundedCornerShape(topStart = shapeRadius, topEnd = shapeRadius))
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center,
@@ -1096,32 +1404,16 @@ class MainActivity : ComponentActivity() {
                         Icon(
                             imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = "Favorito",
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(16.dp).graphicsLayer { scaleX = favoriteScale; scaleY = favoriteScale },
                             tint = if (isFavorite) MaterialTheme.colorScheme.primary else Color.White,
                         )
                     }
 
-                    // Platform tag overlay
-                    game.platform?.let { plat ->
-                        Surface(
-                            shape = RoundedCornerShape(bottomEnd = 8.dp),
-                            color = Color.Black.copy(alpha = 0.75f),
-                            modifier = Modifier.align(Alignment.TopStart),
-                        ) {
-                            Text(
-                                text = plat,
-                                color = Color.White,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-                    }
                 }
 
                 Column(modifier = Modifier.padding(10.dp)) {
                     Text(
-                        text = game.title + if (game.recomps.size > 1) " (${game.recomps.size} recomps)" else "",
+                        text = game.title,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -1136,6 +1428,30 @@ class MainActivity : ComponentActivity() {
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        AssistChip(
+                            onClick = onClick,
+                            label = { Text(L10n.t("Nativo / 60 FPS", "Native / 60 FPS", lang), fontSize = 9.sp) },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ),
+                            border = null,
+                            modifier = Modifier.height(24.dp),
+                        )
+                        if (game.recomps.size > 1) {
+                            AssistChip(
+                                onClick = onInstallClick,
+                                label = { Text("${game.recomps.size} recomps", fontSize = 9.sp, fontWeight = FontWeight.SemiBold) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                    labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
+                                border = null,
+                                modifier = Modifier.height(24.dp),
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -1156,51 +1472,10 @@ class MainActivity : ComponentActivity() {
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(L10n.t("Cancelar download", "Cancel download", lang), fontSize = 10.sp)
                         }
-                    } else if (isPkgInstalled) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(
-                                onClick = {
-                                    val pkg = store.pkg(game.slug)
-                                    if (pkg != null) {
-                                        context.packageManager.getLaunchIntentForPackage(pkg)?.let {
-                                            context.startActivity(it)
-                                        }
-                                    }
-                                },
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth().height(32.dp),
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(L10n.t("Jogar", "Play", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                            OutlinedButton(
-                                onClick = onInstallClick,
-                                modifier = Modifier.fillMaxWidth().height(30.dp),
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                            ) {
-                                Text(L10n.t("Escolher recomp", "Choose recomp", lang), fontSize = 10.sp)
-                            }
-                        }
-                    } else {
-                        Button(
-                            onClick = onInstallClick,
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(32.dp),
-                        ) {
-                            Text(L10n.t("Instalar Recomp", "Install Recomp", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
                     }
                 }
             }
+        }
         }
     }
 
@@ -1336,7 +1611,7 @@ class MainActivity : ComponentActivity() {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text(g.title + if (g.recomps.size > 1) " (${g.recomps.size} recomps)" else "", maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold) },
+                    title = { Text(g.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold) },
                     navigationIcon = {
                         IconButton(onClick = back) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
@@ -1395,7 +1670,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Text(g.title + if (g.recomps.size > 1) " (${g.recomps.size} recomps)" else "", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
+                Text(g.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
 
                 g.subtitle?.let {
                     Text(it, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
@@ -1412,6 +1687,16 @@ class MainActivity : ComponentActivity() {
                         onClick = {},
                         label = { Text(L10n.t("Port Nativo C/C++", "Native Port C/C++", lang)) },
                     )
+                    if (g.recomps.size > 1) {
+                        AssistChip(
+                            onClick = onInstallRecomp,
+                            label = { Text("${g.recomps.size} recomps", fontWeight = FontWeight.SemiBold) },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ),
+                        )
+                    }
                     if (isPkgInstalled) {
                         AssistChip(
                             onClick = {},
@@ -1540,7 +1825,7 @@ class MainActivity : ComponentActivity() {
                     store.pkg(g.slug)?.let { pkg ->
                         context.packageManager.getLaunchIntentForPackage(pkg)?.let { intent ->
                             Button(
-                                onClick = { context.startActivity(intent) },
+                                onClick = { launchTrackedGame(context, store, g.slug, g.title, intent) },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
@@ -1560,25 +1845,77 @@ class MainActivity : ComponentActivity() {
      * Settings screen with Language, Visuals, and Fixed Apply Floating Action Button at Bottom-Right Corner.
      */
     @Composable
-    fun SettingsScreen(store: Store, onApplyChanges: () -> Unit) {
+    fun SettingsScreen(store: Store, onApplyChanges: () -> Unit, accountActionRequest: Int = 0) {
         val context = LocalContext.current
         var language by remember { mutableIntStateOf(store.language) }
         var themeMode by remember { mutableIntStateOf(store.themeMode) }
         var colorAccent by remember { mutableIntStateOf(store.colorAccent) }
         var cardCornerRadius by remember { mutableIntStateOf(store.cardCornerRadius) }
+        var coverSize by remember { mutableIntStateOf(store.coverSize) }
+        var animationsEnabled by remember { mutableStateOf(store.animationsEnabled) }
         var dynamicColor by remember { mutableStateOf(store.dynamicColor) }
         var isGridView by remember { mutableStateOf(store.isGridView) }
         var isCompactCard by remember { mutableStateOf(store.isCompactCard) }
         var autoSearchCovers by remember { mutableStateOf(store.autoSearchCovers) }
         var githubToken by remember { mutableStateOf(store.githubToken) }
+        var showLoginDialog by remember { mutableStateOf(false) }
+        var showProfileDialog by remember { mutableStateOf(false) }
+        var loginEmail by remember { mutableStateOf("") }
+        var loginPassword by remember { mutableStateOf("") }
+        var loginPasswordConfirm by remember { mutableStateOf("") }
+        var showLoginPassword by remember { mutableStateOf(false) }
+        var showConfirmPassword by remember { mutableStateOf(false) }
+        var loginDisplayName by remember { mutableStateOf("") }
+        var isSignUpMode by remember { mutableStateOf(false) }
+        var isAuthLoading by remember { mutableStateOf(false) }
+        var authMessage by remember { mutableStateOf<String?>(null) }
+        val authService = remember(context) { AuthService.create(context) }
+        var authUser by remember(authService) { mutableStateOf(authService?.currentUser) }
+
+        DisposableEffect(authService) {
+            val listener = authService?.addAuthStateListener { authUser = it }
+            onDispose {
+                if (listener != null) authService?.removeAuthStateListener(listener)
+            }
+        }
+
+        LaunchedEffect(accountActionRequest, authUser?.uid) {
+            if (accountActionRequest > 0) {
+                if (authUser?.isEmailVerified == true) {
+                    showLoginDialog = false
+                    showProfileDialog = true
+                } else {
+                    showProfileDialog = false
+                    showLoginDialog = true
+                }
+            }
+        }
 
         val lang = language
+
+        fun authErrorMessage(exception: Exception?): String {
+            return when ((exception as? FirebaseAuthException)?.errorCode) {
+                "ERROR_INVALID_EMAIL" -> L10n.t("Formato de e-mail inválido. Confira o endereço e tente novamente.", "Invalid email format. Check the address and try again.", lang)
+                "ERROR_OPERATION_NOT_ALLOWED" -> L10n.t("O login por e-mail ainda não está habilitado no Firebase.", "Email sign-in is not enabled in Firebase yet.", lang)
+                "ERROR_TOO_MANY_REQUESTS" -> L10n.t("Muitas tentativas. Aguarde um pouco e tente novamente.", "Too many attempts. Wait a little and try again.", lang)
+                "ERROR_NETWORK_REQUEST_FAILED" -> L10n.t("Falha de conexão. Verifique sua internet e tente novamente.", "Connection failed. Check your internet and try again.", lang)
+                "ERROR_USER_NOT_FOUND", "ERROR_WRONG_PASSWORD", "ERROR_INVALID_CREDENTIAL" ->
+                    L10n.t("E-mail ou senha incorretos.", "Email or password is incorrect.", lang)
+                "ERROR_EMAIL_ALREADY_IN_USE" ->
+                    L10n.t("Já existe uma conta com esse e-mail.", "An account already exists for this email.", lang)
+                "ERROR_WEAK_PASSWORD" ->
+                    L10n.t("Use uma senha com pelo menos 8 caracteres.", "Use a password with at least 8 characters.", lang)
+                else -> L10n.t("Não foi possível concluir. Verifique a conexão e tente novamente.", "Could not complete the request. Check your connection and try again.", lang)
+            }
+        }
 
         fun saveAndApply() {
             store.language = language
             store.themeMode = themeMode
             store.colorAccent = colorAccent
             store.cardCornerRadius = cardCornerRadius
+            store.coverSize = coverSize
+            store.animationsEnabled = animationsEnabled
             store.dynamicColor = dynamicColor
             store.isGridView = isGridView
             store.isCompactCard = isCompactCard
@@ -1598,6 +1935,52 @@ class MainActivity : ComponentActivity() {
                     .padding(top = 8.dp, bottom = 100.dp), // Extra bottom padding so FAB never covers options
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                Text(
+                    text = L10n.t("Conta", "Account", lang),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = if (authUser == null) {
+                                L10n.t("Entre na sua conta", "Sign in to your account", lang)
+                            } else {
+                                L10n.t("Conta conectada", "Account connected", lang)
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = authUser?.email ?: L10n.t(
+                                "Use e-mail e senha, com verificação de e-mail e recuperação de senha.",
+                                "Sign in with email and password, including email verification and password recovery.",
+                                lang,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(onClick = { showLoginDialog = true }) {
+                            Text(
+                                if (authUser == null) L10n.t("Fazer login", "Sign in", lang)
+                                else L10n.t("Gerenciar conta", "Manage account", lang),
+                            )
+                        }
+                        if (authUser != null) {
+                            OutlinedButton(onClick = { showProfileDialog = true; showLoginDialog = false }) {
+                                Text(L10n.t("Perfil e progresso", "Profile & progress", lang))
+                            }
+                            OutlinedButton(onClick = { authService?.signOut() }) {
+                                Text(L10n.t("Sair", "Sign out", lang))
+                            }
+                        }
+                    }
+                }
+
                 // Section 0: Idioma / Language
                 Text(
                     text = L10n.t("Idioma / Language", "Language / Idioma", lang),
@@ -1697,6 +2080,45 @@ class MainActivity : ComponentActivity() {
 
                             RadioButton(selected = cardCornerRadius == 2, onClick = { cardCornerRadius = 2 })
                             Text(L10n.t("Reto", "Square", lang))
+                        }
+
+                        HorizontalDivider()
+
+                        Text(L10n.t("Tamanho das capas", "Cover size", lang), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = coverSize == 0,
+                                onClick = { coverSize = 0 },
+                                label = { Text(L10n.t("Pequena", "Small", lang)) },
+                            )
+                            FilterChip(
+                                selected = coverSize == 1,
+                                onClick = { coverSize = 1 },
+                                label = { Text(L10n.t("Média", "Medium", lang)) },
+                            )
+                            FilterChip(
+                                selected = coverSize == 2,
+                                onClick = { coverSize = 2 },
+                                label = { Text(L10n.t("Grande", "Large", lang)) },
+                            )
+                        }
+
+                        HorizontalDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(L10n.t("Animações da interface", "Interface animations", lang), fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    L10n.t("Transições suaves e resposta animada dos favoritos", "Smooth transitions and animated favorite feedback", lang),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(checked = animationsEnabled, onCheckedChange = { animationsEnabled = it })
                         }
 
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -1819,7 +2241,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text("RecompDroid v0.1", fontWeight = FontWeight.Bold)
+                        Text("RecompDroid v0.0.2", fontWeight = FontWeight.Bold)
                         Text(
                             text = L10n.t("Launcher nativo para recompilações e ports de console no Android. Capas dos sites oficiais, repositórios de alta fidelidade e instalação direta de APKs do GitHub.", "Native launcher for console recompilations and ports on Android. Official covers, high-fidelity repositories, and one-tap APK installation from GitHub.", lang),
                             style = MaterialTheme.typography.bodySmall,
@@ -1827,6 +2249,360 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+            }
+
+            if (showLoginDialog) {
+                AlertDialog(
+                    onDismissRequest = {
+                        if (!isAuthLoading) showLoginDialog = false
+                    },
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    modifier = Modifier.padding(10.dp).size(24.dp),
+                                )
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    if (authUser == null) {
+                                        if (isSignUpMode) L10n.t("Criar conta", "Create account", lang)
+                                        else L10n.t("Bem-vindo de volta", "Welcome back", lang)
+                                    } else L10n.t("Sua conta", "Your account", lang),
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    if (isSignUpMode && authUser == null)
+                                        L10n.t("Crie sua conta RecompDroid", "Create your RecompDroid account", lang)
+                                    else L10n.t("Acesse sua conta RecompDroid", "Access your RecompDroid account", lang),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    text = {
+                        Column(
+                            modifier = Modifier.verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            when {
+                                authService == null -> {
+                                    Text(
+                                        L10n.t(
+                                            "O Firebase ainda não está conectado a este app. A configuração do projeto é necessária para habilitar o login.",
+                                            "Firebase is not connected to this app yet. Project configuration is required to enable sign-in.",
+                                            lang,
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+
+                                authUser != null -> {
+                                    val user = authUser!!
+                                    Text(user.displayName ?: user.email.orEmpty(), fontWeight = FontWeight.SemiBold)
+                                    OutlinedButton(
+                                        onClick = { showProfileDialog = true; showLoginDialog = false },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) { Text(L10n.t("Editar perfil e progresso", "Edit profile & progress", lang)) }
+                                    Text(
+                                        if (user.isEmailVerified) {
+                                            L10n.t("E-mail verificado", "Email verified", lang)
+                                        } else {
+                                            L10n.t("Confirme seu e-mail para concluir o cadastro.", "Verify your email to complete registration.", lang)
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (!user.isEmailVerified) {
+                                        OutlinedButton(
+                                            enabled = !isAuthLoading,
+                                            onClick = {
+                                                isAuthLoading = true
+                                                authService.sendVerificationEmail(user)
+                                                    .addOnCompleteListener { task ->
+                                                        isAuthLoading = false
+                                                        authMessage = if (task.isSuccessful) {
+                                                            L10n.t("Novo e-mail de verificação enviado.", "A new verification email was sent.", lang)
+                                                        } else {
+                                                            authErrorMessage(task.exception)
+                                                        }
+                                                    }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Text(L10n.t("Reenviar verificação", "Resend verification", lang))
+                                        }
+                                        OutlinedButton(
+                                            enabled = !isAuthLoading,
+                                            onClick = {
+                                                isAuthLoading = true
+                                                authService.reload(user)
+                                                    .addOnCompleteListener { task ->
+                                                        isAuthLoading = false
+                                                        val refreshedUser = authService.currentUser
+                                                        authUser = refreshedUser
+                                                        if (task.isSuccessful && refreshedUser?.isEmailVerified == true) {
+                                                            authMessage = L10n.t("E-mail confirmado com sucesso.", "Email verified successfully.", lang)
+                                                            showLoginDialog = false
+                                                        } else {
+                                                            authMessage = if (task.isSuccessful) {
+                                                                L10n.t("Ainda não encontramos a confirmação. Tente novamente em instantes.", "We could not find the verification yet. Try again shortly.", lang)
+                                                            } else {
+                                                                authErrorMessage(task.exception)
+                                                            }
+                                                        }
+                                                    }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Text(L10n.t("Já confirmei meu e-mail", "I verified my email", lang))
+                                        }
+                                    }
+                                    OutlinedButton(
+                                        enabled = !isAuthLoading,
+                                        onClick = {
+                                            authService.signOut()
+                                            showLoginDialog = false
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(L10n.t("Sair da conta", "Sign out", lang))
+                                    }
+                                }
+
+                                else -> {
+                                    if (isSignUpMode) {
+                                        OutlinedTextField(
+                                            value = loginDisplayName,
+                                            onValueChange = { loginDisplayName = it },
+                                            label = { Text(L10n.t("Nome", "Name", lang)) },
+                                            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = !isAuthLoading,
+                                        )
+                                    }
+                                    OutlinedTextField(
+                                        value = loginEmail,
+                                        onValueChange = { loginEmail = it.trimStart() },
+                                        label = { Text(L10n.t("Endereço de e-mail", "Email address", lang)) },
+                                        leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
+                                        keyboardOptions = KeyboardOptions(
+                                            keyboardType = KeyboardType.Email,
+                                            capitalization = KeyboardCapitalization.None,
+                                        ),
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !isAuthLoading,
+                                    )
+                                    OutlinedTextField(
+                                        value = loginPassword,
+                                        onValueChange = { loginPassword = it },
+                                        label = { Text(L10n.t("Senha", "Password", lang)) },
+                                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                        trailingIcon = {
+                                            TextButton(onClick = { showLoginPassword = !showLoginPassword }) {
+                                                Text(
+                                                    if (showLoginPassword) L10n.t("Ocultar", "Hide", lang) else L10n.t("Mostrar", "Show", lang),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                            }
+                                        },
+                                        visualTransformation = if (showLoginPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !isAuthLoading,
+                                    )
+                                    if (isSignUpMode) {
+                                        OutlinedTextField(
+                                            value = loginPasswordConfirm,
+                                            onValueChange = { loginPasswordConfirm = it },
+                                            label = { Text(L10n.t("Confirmar senha", "Confirm password", lang)) },
+                                            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                            trailingIcon = {
+                                                TextButton(onClick = { showConfirmPassword = !showConfirmPassword }) {
+                                                    Text(
+                                                        if (showConfirmPassword) L10n.t("Ocultar", "Hide", lang) else L10n.t("Mostrar", "Show", lang),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                }
+                                            },
+                                            visualTransformation = if (showConfirmPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = !isAuthLoading,
+                                        )
+                                    }
+                                    authMessage?.let {
+                                        Text(
+                                            text = it,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                    if (!isSignUpMode) {
+                                        TextButton(
+                                            enabled = !isAuthLoading,
+                                            onClick = {
+                                                val email = loginEmail.trim()
+                                                if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                                                    authMessage = L10n.t("Informe um e-mail válido.", "Enter a valid email address.", lang)
+                                                } else {
+                                                    isAuthLoading = true
+                                                    authMessage = null
+                                                    authService.sendPasswordReset(email)
+                                                        .addOnCompleteListener { task ->
+                                                            isAuthLoading = false
+                                                            authMessage = if (task.isSuccessful) {
+                                                                L10n.t(
+                                                                    "Se houver uma conta para esse e-mail, você receberá um link para redefinir a senha.",
+                                                                    "If an account exists for this email, you will receive a password reset link.",
+                                                                    lang,
+                                                                )
+                                                            } else {
+                                                                authErrorMessage(task.exception)
+                                                            }
+                                                        }
+                                                }
+                                            },
+                                        ) {
+                                            Text(L10n.t("Esqueci minha senha", "Forgot password", lang))
+                                        }
+                                    }
+                                    TextButton(
+                                        enabled = !isAuthLoading,
+                                        onClick = {
+                                            isSignUpMode = !isSignUpMode
+                                            authMessage = null
+                                        },
+                                    ) {
+                                        Text(
+                                            if (isSignUpMode) {
+                                                L10n.t("Já tenho uma conta", "I already have an account", lang)
+                                            } else {
+                                                L10n.t("Criar uma conta", "Create an account", lang)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+
+                            authMessage?.takeIf { authUser != null }?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        if (authUser == null) {
+                            Button(
+                                enabled = authService != null && !isAuthLoading,
+                                onClick = {
+                                    val email = loginEmail.trim()
+                                    when {
+                                        authService == null -> Unit
+                                        !Patterns.EMAIL_ADDRESS.matcher(email).matches() -> {
+                                            authMessage = L10n.t("Informe um e-mail válido.", "Enter a valid email address.", lang)
+                                        }
+                                        loginPassword.length < 8 -> {
+                                            authMessage = L10n.t("Use uma senha com pelo menos 8 caracteres.", "Use a password with at least 8 characters.", lang)
+                                        }
+                                        isSignUpMode && loginDisplayName.isBlank() -> {
+                                            authMessage = L10n.t("Informe seu nome.", "Enter your name.", lang)
+                                        }
+                                        isSignUpMode && loginPassword != loginPasswordConfirm -> {
+                                            authMessage = L10n.t("As senhas não coincidem.", "Passwords do not match.", lang)
+                                        }
+                                        else -> {
+                                            isAuthLoading = true
+                                            authMessage = null
+                                            val request = if (isSignUpMode) {
+                                                authService.createAccount(email, loginPassword)
+                                            } else {
+                                                authService.signIn(email, loginPassword)
+                                            }
+                                            request.addOnCompleteListener { task ->
+                                                isAuthLoading = false
+                                                if (!task.isSuccessful) {
+                                                    authMessage = authErrorMessage(task.exception)
+                                                } else {
+                                                    val user = authService.currentUser
+                                                    if (user == null) {
+                                                        authMessage = L10n.t("Não foi possível carregar a sessão.", "Could not load the account session.", lang)
+                                                    } else if (isSignUpMode) {
+                                                        authService.updateDisplayName(user, loginDisplayName.trim())
+                                                            .addOnCompleteListener {
+                                                                authService.sendVerificationEmail(user)
+                                                                    .addOnCompleteListener { verification ->
+                                                                        authMessage = if (verification.isSuccessful) {
+                                                                            L10n.t("Conta criada. Confira seu e-mail para verificá-la.", "Account created. Check your email to verify it.", lang)
+                                                                        } else {
+                                                                            authErrorMessage(verification.exception)
+                                                                        }
+                                                                    }
+                                                            }
+                                                    } else if (user.isEmailVerified) {
+                                                        showLoginDialog = false
+                                                    } else {
+                                                        authService.sendVerificationEmail(user)
+                                                            .addOnCompleteListener {
+                                                                authMessage = L10n.t(
+                                                                    "Confirme seu e-mail. Enviamos um novo link de verificação.",
+                                                                    "Verify your email. We sent a new verification link.",
+                                                                    lang,
+                                                                )
+                                                            }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                            ) {
+                                Text(
+                                    if (isAuthLoading) L10n.t("Aguarde…", "Please wait…", lang)
+                                    else if (isSignUpMode) L10n.t("Criar conta", "Create account", lang)
+                                    else L10n.t("Entrar", "Sign in", lang),
+                                )
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            enabled = !isAuthLoading,
+                            onClick = {
+                                showLoginDialog = false
+                                authMessage = null
+                            },
+                        ) {
+                            Text(L10n.t("Fechar", "Close", lang))
+                        }
+                    },
+                )
+            }
+
+            if (showProfileDialog && authUser != null) {
+                ProfileEditorDialog(
+                    user = authUser!!,
+                    lang = lang,
+                    onDismiss = { showProfileDialog = false },
+                )
             }
 
             // BOTÃO DE APLICAR MUDANÇAS FIXO AO CANTO INFERIOR DIREITO
@@ -1842,6 +2618,154 @@ class MainActivity : ComponentActivity() {
                 text = { Text(L10n.t("Aplicar Mudanças", "Apply Changes", lang), fontWeight = FontWeight.Bold) },
             )
         }
+    }
+
+    @Composable
+    fun ProfileEditorDialog(
+        user: FirebaseUser,
+        lang: Int,
+        onDismiss: () -> Unit,
+    ) {
+        val context = LocalContext.current
+        val cloud = remember { CloudProfileStore() }
+        var displayName by remember(user.uid) { mutableStateOf(user.displayName.orEmpty()) }
+        var username by remember(user.uid) { mutableStateOf("") }
+        var photoBase64 by remember(user.uid) { mutableStateOf<String?>(null) }
+        var progress by remember(user.uid) { mutableStateOf<List<CloudGameProgress>>(emptyList()) }
+        var message by remember { mutableStateOf<String?>(null) }
+        var loading by remember { mutableStateOf(true) }
+        var saving by remember { mutableStateOf(false) }
+
+        val photoPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+        ) { uri ->
+            if (uri != null) {
+                runCatching {
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    context.contentResolver.openInputStream(uri).use {
+                        android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+                    }
+                    val sample = maxOf(1, minOf(bounds.outWidth, bounds.outHeight) / 512)
+                    val source = context.contentResolver.openInputStream(uri).use {
+                        requireNotNull(it) { "Could not open selected image" }
+                        android.graphics.BitmapFactory.decodeStream(
+                            it,
+                            null,
+                            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+                        )
+                    } ?: error("Unsupported image")
+                    val scaled = android.graphics.Bitmap.createScaledBitmap(source, 256, 256, true)
+                    val bytes = java.io.ByteArrayOutputStream().use { output ->
+                        scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 78, output)
+                        output.toByteArray()
+                    }
+                    photoBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                }.onFailure { message = L10n.t("Não foi possível carregar essa imagem.", "Could not load that image.", lang) }
+            }
+        }
+
+        LaunchedEffect(user.uid) {
+            loading = true
+            cloud.loadProfile(user.uid) { data, error ->
+                if (data != null) {
+                    displayName = (data["displayName"] as? String) ?: user.displayName.orEmpty()
+                    username = data["username"] as? String ?: ""
+                    photoBase64 = data["photoBase64"] as? String
+                }
+                if (error != null) {
+                    message = L10n.t("Sincronização indisponível. Ative o Firestore no Firebase para sincronizar.", "Sync unavailable. Enable Firestore in Firebase to sync.", lang)
+                }
+                cloud.loadProgress(user.uid) { rows, progressError ->
+                    progress = rows.sortedByDescending { it.playSeconds }
+                    if (progressError != null) {
+                        message = L10n.t("Não foi possível carregar o progresso da nuvem.", "Could not load cloud progress.", lang)
+                    }
+                    loading = false
+                }
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { if (!saving) onDismiss() },
+            title = { Text(L10n.t("Perfil e progresso", "Profile & progress", lang), fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    val imageData = photoBase64
+                    if (!imageData.isNullOrBlank()) {
+                        AsyncImage(
+                            model = "data:image/jpeg;base64,$imageData",
+                            contentDescription = L10n.t("Foto do perfil", "Profile photo", lang),
+                            modifier = Modifier.size(76.dp).clip(CircleShape),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                            Icon(Icons.Default.Person, null, modifier = Modifier.padding(18.dp).size(40.dp))
+                        }
+                    }
+                    OutlinedButton(onClick = { photoPicker.launch("image/*") }, enabled = !saving) {
+                        Text(L10n.t("Escolher foto", "Choose photo", lang))
+                    }
+                    OutlinedTextField(
+                        value = displayName,
+                        onValueChange = { displayName = it.take(60) },
+                        label = { Text(L10n.t("Nome de exibição", "Display name", lang)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it.filter { c -> c.isLetterOrDigit() || c == '_' || c == '.' }.take(24) },
+                        label = { Text("@username") },
+                        supportingText = { Text(L10n.t("3 a 24 letras, números, ponto ou _", "3–24 letters, numbers, dot, or _", lang)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(L10n.t("Progresso sincronizado", "Synced progress", lang), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    val totalSeconds = progress.sumOf { it.playSeconds }
+                    Text(
+                        L10n.t("Total: ${totalSeconds / 3600} h ${totalSeconds % 3600 / 60} min · ${progress.size} jogos", "Total: ${totalSeconds / 3600} h ${totalSeconds % 3600 / 60} min · ${progress.size} games", lang),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    progress.take(8).forEach { game ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(game.title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${game.playSeconds / 3600}h ${game.playSeconds % 3600 / 60}m", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !saving && displayName.isNotBlank() && username.length in 3..24,
+                    onClick = {
+                        saving = true
+                        message = null
+                        val trimmedName = displayName.trim()
+                        user.updateProfile(com.google.firebase.auth.UserProfileChangeRequest.Builder().setDisplayName(trimmedName).build())
+                            .addOnCompleteListener { authTask ->
+                                if (!authTask.isSuccessful) {
+                                    saving = false
+                                    message = L10n.t("Não foi possível atualizar o nome da conta.", "Could not update account name.", lang)
+                                } else {
+                                    cloud.saveProfile(user.uid, trimmedName, username.trim(), photoBase64) { error ->
+                                        saving = false
+                                        if (error == null) onDismiss()
+                                        else message = L10n.t("Falha ao salvar na nuvem. Ative o Firestore e tente novamente.", "Cloud save failed. Enable Firestore and try again.", lang)
+                                    }
+                                }
+                            }
+                    },
+                ) { Text(if (saving) L10n.t("Salvando…", "Saving…", lang) else L10n.t("Salvar", "Save", lang)) }
+            },
+            dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(L10n.t("Fechar", "Close", lang)) } },
+        )
     }
 
     @Composable

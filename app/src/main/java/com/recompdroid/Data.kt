@@ -257,15 +257,33 @@ object Catalog {
             normalized.startsWith("adobe flash")
     }
 
-    private fun gameGroupKey(title: String): String {
-        val baseTitle = title
-            .replace(Regex("""\s*\([^)]*(?:android|recomp|decomp|port|native|windows|linux|macos)[^)]*\)\s*$""", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("""\s*\[[^\]]*(?:android|recomp|decomp|port|native|windows|linux|macos)[^\]]*\]\s*$""", RegexOption.IGNORE_CASE), "")
-        return Normalizer.normalize(baseTitle.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+    private fun normalizedGameTitle(title: String): String =
+        Normalizer.normalize(title.lowercase(Locale.ROOT), Normalizer.Form.NFD)
             .replace(Regex("""\p{M}+"""), "")
             .replace(Regex("""[^a-z0-9]+"""), " ")
             .trim()
+            .replace(Regex("""\s+"""), " ")
+
+    private fun canonicalGameTitle(title: String, project: String? = null): String {
+        val annotation = Regex("""\s*\(([^()]*)\)\s*$""").find(title)
+            ?: Regex("""\s*\[([^\]]*)\]\s*$""").find(title)
+            ?: return title.trim()
+        val annotationKey = normalizedGameTitle(annotation.groupValues[1])
+        val projectKey = project?.let(::normalizedGameTitle).orEmpty()
+        val annotationMatchesProject = projectKey.isNotBlank() &&
+            annotationKey.replace(" ", "") == projectKey.replace(" ", "")
+        val identifiesPortOrProject = annotationMatchesProject || Regex(
+            """\b(android|recomp|decomp|port|native|windows|linux|macos|mobile|enhanced|project|pc)\b|community edition|dual screen""",
+        ).containsMatchIn(annotationKey)
+        return if (identifiesPortOrProject) {
+            title.removeRange(annotation.range).trim()
+        } else {
+            title.trim()
+        }
     }
+
+    private fun gameGroupKey(title: String, project: String?): String =
+        normalizedGameTitle(canonicalGameTitle(title, project))
 
     suspend fun games(): List<Game> = withContext(Dispatchers.IO) {
         val catalog = JSONObject(get(CATALOG_URL))
@@ -313,12 +331,17 @@ object Catalog {
                 version = version,
                 recomps = listOf(RecompOption(slug, project, repo, version)),
             )
-        }.distinctBy { it.slug }.groupBy { gameGroupKey(it.title) }
+        }.distinctBy { it.slug }.groupBy { gameGroupKey(it.title, it.subtitle) }
             .values
             .map { gamesForTitle ->
                 val first = gamesForTitle.first()
                 val recomps = gamesForTitle.flatMap { it.recomps }.distinctBy { it.slug }
+                val displayTitle = gamesForTitle
+                    .map { canonicalGameTitle(it.title, it.subtitle) }
+                    .minByOrNull { it.length }
+                    ?: canonicalGameTitle(first.title, first.subtitle)
                 first.copy(
+                    title = displayTitle,
                     subtitle = if (recomps.size > 1) null else first.subtitle,
                     recomps = recomps,
                 )
@@ -702,6 +725,34 @@ class Store(private val ctx: Context) {
     fun save(slug: String, tag: String, pkg: String) = p.edit { putString("tag:$slug", tag).putString("pkg:$slug", pkg) }
     fun installed(): List<String> = p.all.keys.asSequence().filter { it.startsWith("tag:") }.map { it.removePrefix("tag:") }.toList()
 
+    data class PendingPlay(val uid: String?, val slug: String, val title: String, val startedAt: Long)
+
+    fun beginPlay(uid: String?, slug: String, title: String) {
+        p.edit {
+            putString("pending_play_slug", slug)
+            putString("pending_play_title", title)
+            putString("pending_play_uid", uid)
+            putLong("pending_play_started", System.currentTimeMillis())
+        }
+    }
+
+    fun finishPendingPlay(): PendingPlay? {
+        val slug = p.getString("pending_play_slug", null) ?: return null
+        val session = PendingPlay(
+            uid = p.getString("pending_play_uid", null),
+            slug = slug,
+            title = p.getString("pending_play_title", slug) ?: slug,
+            startedAt = p.getLong("pending_play_started", 0L),
+        )
+        p.edit {
+            remove("pending_play_slug")
+            remove("pending_play_title")
+            remove("pending_play_uid")
+            remove("pending_play_started")
+        }
+        return session
+    }
+
     fun isAppInstalled(slug: String): Boolean {
         val packageName = pkg(slug) ?: return false
         return runCatching {
@@ -718,29 +769,41 @@ class Store(private val ctx: Context) {
         return next
     }
 
+    var lastSeenReleaseNotesVersion: String
+        get() = p.getString("last_seen_release_notes_version", "") ?: ""
+        set(value) = p.edit { putString("last_seen_release_notes_version", value) }
+
     // Settings
     var language: Int
         get() = p.getInt("setting_language", 0) // 0: Português (Brasil), 1: English (US)
         set(value) = p.edit { putInt("setting_language", value) }
 
     var themeMode: Int
-        get() = p.getInt("setting_theme_mode", 0) // 0: System, 1: Dark, 2: Light
+        get() = p.getInt("setting_theme_mode", 1) // 0: System, 1: Dark, 2: Light
         set(value) = p.edit { putInt("setting_theme_mode", value) }
 
     var colorAccent: Int
-        get() = p.getInt("setting_color_accent", 0) // 0: Dynamic, 1: Blue, 2: Purple, 3: Emerald, 4: Crimson, 5: OLED Pitch Black
+        get() = p.getInt("setting_color_accent", 5) // 0: Dynamic, 1: Blue, 2: Purple, 3: Emerald, 4: Crimson, 5: OLED Pitch Black
         set(value) = p.edit { putInt("setting_color_accent", value) }
 
     var cardCornerRadius: Int
         get() = p.getInt("setting_card_corner", 0) // 0: Rounded (16dp), 1: Very Rounded (24dp), 2: Square (6dp)
         set(value) = p.edit { putInt("setting_card_corner", value) }
 
+    var coverSize: Int
+        get() = p.getInt("setting_cover_size", 1) // 0: small, 1: medium, 2: large
+        set(value) = p.edit { putInt("setting_cover_size", value.coerceIn(0, 2)) }
+
+    var animationsEnabled: Boolean
+        get() = p.getBoolean("setting_animations_enabled", true)
+        set(value) = p.edit { putBoolean("setting_animations_enabled", value) }
+
     var dynamicColor: Boolean
-        get() = p.getBoolean("setting_dynamic_color", true)
+        get() = p.getBoolean("setting_dynamic_color", false)
         set(value) = p.edit { putBoolean("setting_dynamic_color", value) }
 
     var isGridView: Boolean
-        get() = p.getBoolean("setting_grid_view", false)
+        get() = p.getBoolean("setting_grid_view", true)
         set(value) = p.edit { putBoolean("setting_grid_view", value) }
 
     var isCompactCard: Boolean

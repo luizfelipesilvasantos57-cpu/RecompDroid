@@ -3,3 +3,5 @@ build/
 local.properties
 .idea/
 *.hprof
+firebase-debug.log
+firebase-debug.*.log
