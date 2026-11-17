@@ -753,12 +753,15 @@ class Store(private val ctx: Context) {
         return session
     }
 
+    fun uninstall(slug: String) {
+        p.edit {
+            remove("tag:$slug")
+            remove("pkg:$slug")
+        }
+    }
+
     fun isAppInstalled(slug: String): Boolean {
-        val packageName = pkg(slug) ?: return false
-        return runCatching {
-            ctx.packageManager.getPackageInfo(packageName, 0)
-            true
-        }.getOrDefault(false)
+        return tag(slug) != null || pkg(slug) != null
     }
 
     // Favorites

@@ -6,7 +6,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Patterns
 import android.widget.Toast
+import java.io.File
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
@@ -24,6 +26,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,6 +70,11 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -141,10 +149,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.net.HttpURLConnection
 import java.util.concurrent.atomic.AtomicReference
-
-object L10n {
-    fun t(pt: String, en: String, lang: Int): String = if (lang == 1) en else pt
-}
 
 private fun platformFilterGroup(platform: String): String {
     val name = platform.lowercase()
@@ -285,6 +289,7 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
         val lang = store.language
+        LaunchedEffect(lang) { L10n.setLanguage(context, lang) }
         val accountAuth = remember(context) { AuthService.create(context) }
         var accountUser by remember(accountAuth) { mutableStateOf(accountAuth?.currentUser) }
         var profilePhotoBase64 by remember { mutableStateOf<String?>(null) }
@@ -313,9 +318,37 @@ class MainActivity : ComponentActivity() {
         var query by remember { mutableStateOf("") }
         var onlyFavorites by remember { mutableStateOf(false) }
         var selectedPlatformFilter by remember { mutableStateOf<String?>(null) }
+        var sortOption by remember { mutableIntStateOf(0) }
         var selectedGame by remember { mutableStateOf<Game?>(null) }
         var pendingInstallGame by remember { mutableStateOf<Game?>(null) }
+        var installedMenuGame by remember { mutableStateOf<Game?>(null) }
+        var confirmUninstallGame by remember { mutableStateOf<Game?>(null) }
         var rev by remember { mutableIntStateOf(0) }
+        BackHandler(enabled = selectedGame != null || pendingInstallGame != null || installedMenuGame != null || confirmUninstallGame != null || tab != 0) {
+            when {
+                selectedGame != null -> selectedGame = null
+                pendingInstallGame != null -> pendingInstallGame = null
+                installedMenuGame != null -> installedMenuGame = null
+                confirmUninstallGame != null -> confirmUninstallGame = null
+                tab != 0 -> tab = 0
+            }
+        }
+        val uninstallLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+        ) { rev++ }
+
+        fun resolvePkg(slug: String, title: String): String {
+            store.pkg(slug)?.let { return it }
+            val pm = context.packageManager
+            val installed = runCatching { pm.getInstalledPackages(0) }.getOrNull().orEmpty()
+            val slugClean = slug.lowercase().replace(Regex("[^a-z0-9]"), "")
+            val titleClean = title.lowercase().replace(Regex("[^a-z0-9]"), "")
+            installed.firstOrNull { pkgInfo ->
+                val name = pkgInfo.packageName.lowercase()
+                name.contains(slugClean) || (titleClean.length >= 4 && name.contains(titleClean))
+            }?.packageName?.let { return it }
+            return "com.recomp.$slug"
+        }
         val currentReleaseVersion = remember(context) {
             runCatching {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -323,6 +356,73 @@ class MainActivity : ComponentActivity() {
         }
         var showReleaseNotes by remember(store, currentReleaseVersion) {
             mutableStateOf(store.lastSeenReleaseNotesVersion != currentReleaseVersion)
+        }
+
+        val apkPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+        ) { uri ->
+            if (uri != null) {
+                scope.launch {
+                    runCatching {
+                        val inputStream = context.contentResolver.openInputStream(uri)
+                        val fileName = "custom_${System.currentTimeMillis()}.apk"
+                        val destFile = File(context.cacheDir, "apks/$fileName").apply { parentFile?.mkdirs() }
+                        inputStream?.use { input ->
+                            destFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        val pkg = context.packageManager.getPackageArchiveInfo(destFile.path, 0)?.packageName
+                            ?: "com.recomp.custom_${System.currentTimeMillis()}"
+                        val slug = destFile.nameWithoutExtension.lowercase().replace(Regex("[^a-z0-9]"), "").ifBlank { "custom_game" }
+                        store.save(slug, "custom", pkg)
+                        rev++
+
+                        Toast.makeText(
+                            context,
+                            L10n.t("Recomp adicionado à biblioteca!", "Recomp added to library!", lang),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+
+                        val fileUri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", destFile)
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW)
+                                .setDataAndType(fileUri, "application/vnd.android.package-archive")
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+
+                        scope.launch {
+                            kotlinx.coroutines.delay(10000)
+                            runCatching { destFile.delete() }
+                        }
+                    }.onFailure { ex ->
+                        Toast.makeText(context, "Erro ao importar APK: ${ex.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+
+        fun detectDeviceRecomps() {
+            val pm = context.packageManager
+            val installedPackages = runCatching { pm.getInstalledPackages(0) }.getOrNull().orEmpty()
+            var addedCount = 0
+            for (pkgInfo in installedPackages) {
+                val pkgName = pkgInfo.packageName
+                if (pkgName.startsWith("com.recomp.") || pkgName.contains("recomp") || pkgName.contains("port") || pkgName.contains("sm64") || pkgName.contains("zelda")) {
+                    val slug = pkgName.substringAfterLast('.').lowercase().ifBlank { "detected_game" }
+                    if (store.tag(slug) == null) {
+                        store.save(slug, "detected", pkgName)
+                        addedCount++
+                    }
+                }
+            }
+            rev++
+            Toast.makeText(
+                context,
+                if (addedCount > 0) L10n.t("$addedCount recomps detectados no dispositivo!", "$addedCount recomps detected on device!", lang)
+                else L10n.t("Nenhum novo recomp detectado.", "No new recomps detected.", lang),
+                Toast.LENGTH_SHORT,
+            ).show()
         }
 
         fun dismissReleaseNotes() {
@@ -402,6 +502,12 @@ class MainActivity : ComponentActivity() {
                             .setDataAndType(uri, "application/vnd.android.package-archive")
                             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
                     )
+
+                    // Apagar automaticamente o arquivo APK residual após o instalador do sistema ler o arquivo
+                    scope.launch {
+                        kotlinx.coroutines.delay(10000)
+                        runCatching { file.delete() }
+                    }
                 }.onFailure { ex ->
                     if (ex is CancellationException) {
                         downloadStatusText = L10n.t("Download cancelado.", "Download cancelled.", lang)
@@ -449,7 +555,7 @@ class MainActivity : ComponentActivity() {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(L10n.t("Novidades", "What's new", lang), fontWeight = FontWeight.Bold)
                             Text(
-                                L10n.t("RecompDroid 0.0.2", "RecompDroid 0.0.2", lang),
+                                L10n.t("RecompDroid 0.0.3", "RecompDroid 0.0.3", lang),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                             )
@@ -462,25 +568,19 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Text(
-                            L10n.t("De 0.0.1 para 0.0.2: veja o que chegou nesta versão.", "From 0.0.1 to 0.0.2: here is what is new in this release.", lang),
+                            L10n.t("De 0.0.2 para 0.0.3: desinstalação, avaliações e 10 novos idiomas.", "From 0.0.2 to 0.0.3: uninstall, reviews, and 10 new languages.", lang),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         listOf(
-                            L10n.t("Catálogo Android atualizado", "Updated Android catalog", lang) to
-                                L10n.t("Jogos compatíveis com Android, capas e repositórios revisados com dados do DecompBuddy.", "Android-compatible games, covers, and repositories refreshed with DecompBuddy data.", lang),
-                            L10n.t("Recomps agrupados por jogo", "Recomps grouped by game", lang) to
-                                L10n.t("Cada jogo aparece em um único cartão. Quando há várias versões, o contador abre a escolha do recomp para instalar.", "Each game appears in one card. When several versions are available, the count opens a picker to choose which recomp to install.", lang),
-                            L10n.t("Instalação com controle", "More installation control", lang) to
-                                L10n.t("Fluxo de download e instalação de APK aprimorado, com progresso e opção de cancelar.", "Improved APK download and installation flow, with progress and a cancel option.", lang),
-                            L10n.t("Busca e navegação melhores", "Improved search and browsing", lang) to
-                                L10n.t("Ports de PC aparecem primeiro, consoles mais recentes vêm antes e as categorias solicitadas foram removidas.", "PC ports appear first, newer consoles come before older ones, and the requested categories were removed.", lang),
-                            L10n.t("Visual renovado", "Refreshed look", lang) to
-                                L10n.t("Ícone e identidade RecompDroid atualizados, com cabeçalho, cartões e telas de configurações mais limpos.", "Updated RecompDroid icon and identity, with a cleaner header, cards, and settings screens.", lang),
-                            L10n.t("Conta e segurança", "Account and security", lang) to
-                                L10n.t("Login e cadastro por e-mail, verificação de endereço, recuperação de senha e controle para mostrar ou ocultar a senha.", "Email sign-in and registration, address verification, password recovery, and show-or-hide password controls.", lang),
-                            L10n.t("Relato de bugs", "Bug reports", lang) to
-                                L10n.t("Atalho na tela inicial para enviar relatos diretamente ao GitHub.", "A home-screen shortcut opens GitHub to report bugs.", lang),
+                            L10n.t("Desinstalar pelo app", "Uninstall from the app", lang) to
+                                L10n.t("Use o botão de desinstalação nas páginas dos jogos instalados; o Android pede confirmação antes de remover.", "Use the uninstall button on installed game pages; Android asks for confirmation before removal.", lang),
+                            L10n.t("Avaliações da comunidade", "Community ratings", lang) to
+                                L10n.t("Veja notas e comentários de outros jogadores. Usuários conectados podem publicar ou atualizar sua própria avaliação.", "Read player ratings and reviews. Signed-in users can post or update their own review.", lang),
+                            L10n.t("Mais idiomas", "More languages", lang) to
+                                L10n.t("Escolha entre português, inglês, espanhol, francês, alemão, italiano, japonês, coreano, chinês simplificado, russo, hindi e indonésio.", "Choose Portuguese, English, Spanish, French, German, Italian, Japanese, Korean, Simplified Chinese, Russian, Hindi, or Indonesian.", lang),
+                            L10n.t("Tradução local", "On-device translation", lang) to
+                                L10n.t("As traduções dos textos da interface são processadas no dispositivo pelo ML Kit. O modelo do idioma escolhido é baixado via Wi-Fi na primeira utilização.", "Interface text is translated on-device with ML Kit. The selected language model downloads over Wi-Fi the first time it is used.", lang),
                         ).forEach { (heading, description) ->
                             Row(
                                 verticalAlignment = Alignment.Top,
@@ -525,6 +625,155 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        installedMenuGame?.let { game ->
+            val pkg = store.pkg(game.slug)
+            AlertDialog(
+                onDismissRequest = { installedMenuGame = null },
+                title = { Text(game.title, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            L10n.t("Opções do Recomp Instalado", "Installed Recomp Options", lang),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        // 1. Jogar
+                        TextButton(
+                            onClick = {
+                                installedMenuGame = null
+                                if (pkg != null) {
+                                    context.packageManager.getLaunchIntentForPackage(pkg)?.let { intent ->
+                                        launchTrackedGame(context, store, game.slug, game.title, intent)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(L10n.t("Jogar", "Play", lang), fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // 2. Configurações do recomp
+                        TextButton(
+                            onClick = {
+                                installedMenuGame = null
+                                selectedGame = game
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(L10n.t("Configurações do recomp", "Recomp settings", lang))
+                            }
+                        }
+
+                        // 3. Ver página do recomp
+                        TextButton(
+                            onClick = {
+                                installedMenuGame = null
+                                selectedGame = game
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(L10n.t("Ver página do recomp", "View recomp page", lang))
+                            }
+                        }
+
+                        // 4. Tempo de jogo e estatísticas
+                        TextButton(
+                            onClick = {
+                                installedMenuGame = null
+                                Toast.makeText(
+                                    context,
+                                    L10n.t("Recomp instalado e pronto para jogar. O tempo de jogo é contabilizado ao jogar!", "Installed and ready to play. Playtime is tracked while playing!", lang),
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Star, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(L10n.t("Tempo de jogo e estatísticas", "Playtime & stats", lang))
+                            }
+                        }
+
+                        // 5. Desinstalar do celular
+                        TextButton(
+                            onClick = {
+                                installedMenuGame = null
+                                confirmUninstallGame = game
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(L10n.t("Desinstalar do celular", "Uninstall from phone", lang), color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+
+                        // 6. Remover da biblioteca
+                        TextButton(
+                            onClick = {
+                                installedMenuGame = null
+                                store.uninstall(game.slug)
+                                rev++
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Close, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(L10n.t("Remover da biblioteca", "Remove from library", lang), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { installedMenuGame = null }) {
+                        Text(L10n.t("Fechar", "Close", lang))
+                    }
+                },
+            )
+        }
+
+        confirmUninstallGame?.let { game ->
+            val targetPkg = resolvePkg(game.slug, game.title)
+            AlertDialog(
+                onDismissRequest = { confirmUninstallGame = null },
+                title = { Text(L10n.t("Desinstalar recomp", "Uninstall recomp", lang), fontWeight = FontWeight.Bold) },
+                text = { Text(L10n.t("Deseja realmente desinstalar '${game.title}' do seu dispositivo Android?", "Do you really want to uninstall '${game.title}' from your Android device?", lang)) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            confirmUninstallGame = null
+                            uninstallLauncher.launch(
+                                Intent(Intent.ACTION_DELETE, "package:$targetPkg".toUri()),
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    ) {
+                        Text(L10n.t("Desinstalar", "Uninstall", lang))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmUninstallGame = null }) {
+                        Text(L10n.t("Cancelar", "Cancel", lang))
+                    }
+                },
+            )
+        }
+
         selectedGame?.let { g ->
             Detail(
                 g = g,
@@ -536,6 +785,7 @@ class MainActivity : ComponentActivity() {
                 downloadProgress = downloadProgress,
                 downloadStatusText = downloadStatusText,
                 onCancelDownload = ::cancelDownload,
+                onRequestLogin = { selectedGame = null; tab = 3; accountActionRequest++ },
                 back = { selectedGame = null },
             )
             return
@@ -698,7 +948,13 @@ class MainActivity : ComponentActivity() {
 
                                 matchesTab && matchesFav && matchesPlat && matchesQuery
                             }
-                            .let(Catalog::sortGames)
+                            .let { list ->
+                                when (sortOption) {
+                                    1 -> list.sortedBy { it.title.lowercase() }
+                                    2 -> list.sortedByDescending { it.title.lowercase() }
+                                    else -> Catalog.sortGames(list)
+                                }
+                            }
 
                         Column(
                             modifier = Modifier
@@ -720,6 +976,34 @@ class MainActivity : ComponentActivity() {
                                         Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(text = it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                                    }
+                                }
+                            }
+
+                            if (tab == 2) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { apkPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*")) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(L10n.t("Escolher APK", "Choose APK", lang), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    OutlinedButton(
+                                        onClick = { detectDeviceRecomps() },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(L10n.t("Detectar do celular", "Detect from phone", lang), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -749,7 +1033,9 @@ class MainActivity : ComponentActivity() {
                                         unfocusedBorderColor = Color.Transparent,
                                     ),
                                 )
+                            }
 
+                            if (tab == 0 || tab == 2) {
                                 val platformOptions = remember(games) {
                                     val groups = games.mapNotNull { it.platform }
                                         .map(::platformFilterGroup)
@@ -761,7 +1047,7 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(bottom = 10.dp),
+                                        .padding(bottom = 6.dp),
                                 ) {
                                     item {
                                         FilterChip(
@@ -798,6 +1084,36 @@ class MainActivity : ComponentActivity() {
                                                 selectedContainerColor = Color(0xFF58E68A),
                                                 selectedLabelColor = Color.Black,
                                             ),
+                                        )
+                                    }
+                                }
+
+                                // Sorting chips
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 10.dp),
+                                ) {
+                                    item {
+                                        FilterChip(
+                                            selected = sortOption == 0,
+                                            onClick = { sortOption = 0 },
+                                            label = { Text(L10n.t("Padrão", "Default", lang)) },
+                                        )
+                                    }
+                                    item {
+                                        FilterChip(
+                                            selected = sortOption == 1,
+                                            onClick = { sortOption = 1 },
+                                            label = { Text(L10n.t("A-Z", "A-Z", lang)) },
+                                        )
+                                    }
+                                    item {
+                                        FilterChip(
+                                            selected = sortOption == 2,
+                                            onClick = { sortOption = 2 },
+                                            label = { Text(L10n.t("Z-A", "Z-A", lang)) },
                                         )
                                     }
                                 }
@@ -865,6 +1181,11 @@ class MainActivity : ComponentActivity() {
                                                 rev++
                                             },
                                             onClick = { selectedGame = g },
+                                            onLongClick = {
+                                                if (store.tag(g.slug) != null || store.pkg(g.slug) != null || store.isAppInstalled(g.slug)) {
+                                                    installedMenuGame = g
+                                                }
+                                            },
                                         )
                                     }
                                 }
@@ -888,6 +1209,11 @@ class MainActivity : ComponentActivity() {
                                                 rev++
                                             },
                                             onClick = { selectedGame = g },
+                                            onLongClick = {
+                                                if (store.tag(g.slug) != null || store.pkg(g.slug) != null || store.isAppInstalled(g.slug)) {
+                                                    installedMenuGame = g
+                                                }
+                                            },
                                         )
                                     }
                                 }
@@ -997,6 +1323,7 @@ class MainActivity : ComponentActivity() {
      * Modernized GameListCard showing original covers directly beside each game,
      * status badges, and direct "Instalar Recomp" button.
      */
+    @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
     @Composable
     fun GameListCard(
         game: Game,
@@ -1008,6 +1335,7 @@ class MainActivity : ComponentActivity() {
         onInstallClick: () -> Unit,
         onFavoriteClick: () -> Unit,
         onClick: () -> Unit,
+        onLongClick: (() -> Unit)? = null,
     ) {
         val context = LocalContext.current
         val lang = store.language
@@ -1045,8 +1373,13 @@ class MainActivity : ComponentActivity() {
             } else EnterTransition.None,
         ) {
         ElevatedCard(
-            onClick = onClick,
-            modifier = if (store.animationsEnabled) Modifier.fillMaxWidth().animateContentSize(tween(220)) else Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .let { if (store.animationsEnabled) it.animateContentSize(tween(220)) else it }
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { onLongClick?.invoke() },
+                ),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
             shape = RoundedCornerShape(shapeRadius),
             colors = CardDefaults.elevatedCardColors(
@@ -1315,6 +1648,7 @@ class MainActivity : ComponentActivity() {
      * Modernized GameGridCard showing game cover at the top,
      * details, and "Instalar Recomp" button at the bottom.
      */
+    @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
     @Composable
     fun GameGridCard(
         game: Game,
@@ -1325,6 +1659,7 @@ class MainActivity : ComponentActivity() {
         onInstallClick: () -> Unit,
         onFavoriteClick: () -> Unit,
         onClick: () -> Unit,
+        onLongClick: (() -> Unit)? = null,
     ) {
         val lang = store.language
 
@@ -1359,8 +1694,13 @@ class MainActivity : ComponentActivity() {
             } else EnterTransition.None,
         ) {
         ElevatedCard(
-            onClick = onClick,
-            modifier = if (store.animationsEnabled) Modifier.fillMaxWidth().animateContentSize(tween(220)) else Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .let { if (store.animationsEnabled) it.animateContentSize(tween(220)) else it }
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { onLongClick?.invoke() },
+                ),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
             shape = RoundedCornerShape(shapeRadius),
             colors = CardDefaults.elevatedCardColors(
@@ -1547,10 +1887,14 @@ class MainActivity : ComponentActivity() {
         downloadProgress: Float,
         downloadStatusText: String,
         onCancelDownload: () -> Unit,
+        onRequestLogin: () -> Unit,
         back: () -> Unit,
     ) {
         val context = LocalContext.current
         val lang = store.language
+        val uninstallLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+        ) { bump() }
 
         var customCoverUrl by remember { mutableStateOf(store.customCover(g.slug)) }
         val currentRepo by remember {
@@ -1723,6 +2067,12 @@ class MainActivity : ComponentActivity() {
                     lineHeight = 22.sp,
                 )
 
+                GameReviewsSection(
+                    gameSlug = g.slug,
+                    lang = lang,
+                    onRequestLogin = onRequestLogin,
+                )
+
                 // Projeto e recomp disponível no DecompBuddy
                 OutlinedCard(
                     modifier = Modifier.fillMaxWidth(),
@@ -1821,7 +2171,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // BOTÃO PARA JOGAR SE ESTIVER INSTALADO
-                if (isPkgInstalled) {
+                if (isPkgInstalled || store.tag(g.slug) != null || store.pkg(g.slug) != null) {
                     store.pkg(g.slug)?.let { pkg ->
                         context.packageManager.getLaunchIntentForPackage(pkg)?.let { intent ->
                             Button(
@@ -1836,6 +2186,68 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+
+                    var showUninstallConfirm by remember { mutableStateOf(false) }
+                    val targetPkg = store.pkg(g.slug) ?: run {
+                        val pm = context.packageManager
+                        val installed = runCatching { pm.getInstalledPackages(0) }.getOrNull().orEmpty()
+                        val slugClean = g.slug.lowercase().replace(Regex("[^a-z0-9]"), "")
+                        val titleClean = g.title.lowercase().replace(Regex("[^a-z0-9]"), "")
+                        installed.firstOrNull { pkgInfo ->
+                            val name = pkgInfo.packageName.lowercase()
+                            name.contains(slugClean) || (titleClean.length >= 4 && name.contains(titleClean))
+                        }?.packageName ?: "com.recomp.${g.slug}"
+                    }
+
+                    if (showUninstallConfirm) {
+                        AlertDialog(
+                            onDismissRequest = { showUninstallConfirm = false },
+                            title = { Text(L10n.t("Desinstalar recomp", "Uninstall recomp", lang), fontWeight = FontWeight.Bold) },
+                            text = { Text(L10n.t("Deseja realmente desinstalar '${g.title}' do seu dispositivo Android?", "Do you really want to uninstall '${g.title}' from your Android device?", lang)) },
+                            confirmButton = {
+                                Button(
+                                    onClick = {
+                                        showUninstallConfirm = false
+                                        uninstallLauncher.launch(
+                                            Intent(Intent.ACTION_DELETE, "package:$targetPkg".toUri()),
+                                        )
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                ) {
+                                    Text(L10n.t("Desinstalar", "Uninstall", lang))
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showUninstallConfirm = false }) {
+                                    Text(L10n.t("Cancelar", "Cancel", lang))
+                                }
+                            },
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { showUninstallConfirm = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(L10n.t("Desinstalar do celular", "Uninstall from phone", lang), fontWeight = FontWeight.SemiBold)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            store.uninstall(g.slug)
+                            bump()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(L10n.t("Remover da biblioteca", "Remove from library", lang), fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -1844,6 +2256,155 @@ class MainActivity : ComponentActivity() {
     /**
      * Settings screen with Language, Visuals, and Fixed Apply Floating Action Button at Bottom-Right Corner.
      */
+    @Composable
+    fun GameReviewsSection(
+        gameSlug: String,
+        lang: Int,
+        onRequestLogin: () -> Unit,
+    ) {
+        val context = LocalContext.current
+        val reviewStore = remember { GameReviewsStore() }
+        val auth = remember(context) { AuthService.create(context) }
+        var user by remember(auth) { mutableStateOf(auth?.currentUser) }
+        var reviews by remember(gameSlug) { mutableStateOf<List<GameReview>>(emptyList()) }
+        var isLoadingReviews by remember(gameSlug) { mutableStateOf(true) }
+        var isLoadingOwnReview by remember(gameSlug) { mutableStateOf(false) }
+        var rating by remember(gameSlug) { mutableIntStateOf(0) }
+        var comment by remember(gameSlug) { mutableStateOf("") }
+        var isSaving by remember { mutableStateOf(false) }
+        var message by remember { mutableStateOf<String?>(null) }
+
+        DisposableEffect(auth) {
+            val listener = auth?.addAuthStateListener { user = it }
+            onDispose { if (listener != null) auth?.removeAuthStateListener(listener) }
+        }
+
+        fun refreshReviews() {
+            reviewStore.loadReviews(gameSlug) { result, _ ->
+                reviews = result
+                isLoadingReviews = false
+            }
+        }
+
+        LaunchedEffect(gameSlug) {
+            isLoadingReviews = true
+            refreshReviews()
+        }
+
+        LaunchedEffect(user?.uid, gameSlug) {
+            val currentUser = user
+            if (currentUser == null) {
+                isLoadingOwnReview = false
+                rating = 0
+                comment = ""
+            } else {
+                isLoadingOwnReview = true
+                reviewStore.loadMyReview(currentUser.uid, gameSlug) { ownReview, _ ->
+                    rating = ownReview?.rating ?: 0
+                    comment = ownReview?.comment.orEmpty()
+                    isLoadingOwnReview = false
+                }
+            }
+        }
+
+        val average = if (reviews.isEmpty()) 0.0 else reviews.map { it.rating }.average()
+        val canReview = user != null
+
+        ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    L10n.t("Notas e avaliações", "Ratings & reviews", lang),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                when {
+                    isLoadingReviews -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    reviews.isEmpty() -> Text(
+                        L10n.t("Ainda não há avaliações. Seja a primeira pessoa a avaliar.", "No reviews yet. Be the first to rate this recomp.", lang),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    else -> Text(
+                        "${"%.1f".format(java.util.Locale.US, average)} ★ · ${reviews.size} ${L10n.t("avaliações recentes", "recent reviews", lang)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+
+                if (canReview) {
+                    Text(
+                        L10n.t("Sua avaliação", "Your review", lang),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (isLoadingOwnReview) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            (1..5).forEach { value ->
+                                TextButton(onClick = { rating = value }) {
+                                    Text(
+                                        if (value <= rating) "★" else "☆",
+                                        fontSize = 28.sp,
+                                        color = if (value <= rating) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedTextField(
+                            value = comment,
+                            onValueChange = { comment = it.take(500) },
+                            label = { Text(L10n.t("Comentário (opcional)", "Comment (optional)", lang)) },
+                            supportingText = { Text("${comment.length}/500") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2,
+                            maxLines = 5,
+                        )
+                        Button(
+                            enabled = rating in 1..5 && !isSaving,
+                            onClick = {
+                                val reviewer = user ?: return@Button
+                                isSaving = true
+                                message = null
+                                reviewStore.saveReview(reviewer.uid, gameSlug, rating, comment) { result ->
+                                    isSaving = false
+                                    message = if (result.success) {
+                                        L10n.t("Avaliação salva.", "Review saved.", lang)
+                                    } else {
+                                        L10n.t("Não foi possível salvar a avaliação. Tente novamente.", "Could not save the review. Please try again.", lang)
+                                    }
+                                    if (result.success) refreshReviews()
+                                }
+                            },
+                        ) {
+                            Text(if (isSaving) L10n.t("Salvando…", "Saving…", lang) else L10n.t("Publicar avaliação", "Post review", lang))
+                        }
+                    }
+                } else {
+                    TextButton(onClick = onRequestLogin) {
+                        Text(L10n.t("Entre para avaliar esta recomp", "Sign in to review this recomp", lang))
+                    }
+                }
+
+                message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+
+                reviews.take(10).forEach { review ->
+                    HorizontalDivider()
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}", color = MaterialTheme.colorScheme.primary)
+                        if (review.comment.isNotBlank()) {
+                            Text(review.comment, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     fun SettingsScreen(store: Store, onApplyChanges: () -> Unit, accountActionRequest: Int = 0) {
         val context = LocalContext.current
@@ -1860,6 +2421,7 @@ class MainActivity : ComponentActivity() {
         var githubToken by remember { mutableStateOf(store.githubToken) }
         var showLoginDialog by remember { mutableStateOf(false) }
         var showProfileDialog by remember { mutableStateOf(false) }
+        var showLanguageDialog by remember { mutableStateOf(false) }
         var loginEmail by remember { mutableStateOf("") }
         var loginPassword by remember { mutableStateOf("") }
         var loginPasswordConfirm by remember { mutableStateOf("") }
@@ -1892,6 +2454,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val lang = language
+        LaunchedEffect(language) { L10n.setLanguage(context, language) }
 
         fun authErrorMessage(exception: Exception?): String {
             return when ((exception as? FirebaseAuthException)?.errorCode) {
@@ -1981,7 +2544,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Section 0: Idioma / Language
                 Text(
                     text = L10n.t("Idioma / Language", "Language / Idioma", lang),
                     style = MaterialTheme.typography.titleLarge,
@@ -1992,15 +2554,29 @@ class MainActivity : ComponentActivity() {
                 ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = language == 0, onClick = { language = 0 })
-                            Text("Português (Brasil)", fontWeight = if (language == 0) FontWeight.Bold else FontWeight.Normal)
+                        OutlinedButton(
+                            onClick = { showLanguageDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("${L10n.t("Idioma do aplicativo", "App language", lang)} · ${L10n.languages.getOrNull(language)?.label ?: "Português (Brasil)"}")
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = language == 1, onClick = { language = 1 })
-                            Text("English (US)", fontWeight = if (language == 1) FontWeight.Bold else FontWeight.Normal)
+                        if (language >= 2) {
+                            val modelStatus = when (L10n.translationModelState) {
+                                L10n.ModelState.DOWNLOADING -> L10n.t("Baixando modelo de tradução via Wi-Fi…", "Downloading translation model over Wi-Fi…", lang)
+                                L10n.ModelState.READY -> L10n.t("Tradução local pronta.", "On-device translation is ready.", lang)
+                                L10n.ModelState.WIFI_REQUIRED -> L10n.t("Conecte-se ao Wi-Fi e escolha o idioma novamente para baixar o modelo.", "Connect to Wi-Fi and select the language again to download its model.", lang)
+                                L10n.ModelState.OFF -> ""
+                            }
+                            if (modelStatus.isNotBlank()) {
+                                Text(modelStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text(
+                                L10n.t("O primeiro uso baixa um modelo de idioma (cerca de 30 MB). Depois, a tradução funciona no dispositivo.", "First use downloads a language model (about 30 MB). Translation then runs on-device.", lang),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -2602,6 +3178,44 @@ class MainActivity : ComponentActivity() {
                     user = authUser!!,
                     lang = lang,
                     onDismiss = { showProfileDialog = false },
+                )
+            }
+
+            if (showLanguageDialog) {
+                AlertDialog(
+                    onDismissRequest = { showLanguageDialog = false },
+                    title = { Text(L10n.t("Escolha um idioma", "Choose a language", lang)) },
+                    text = {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                        ) {
+                            L10n.languages.forEach { option ->
+                                TextButton(
+                                    onClick = {
+                                        language = option.index
+                                        store.language = option.index
+                                        showLanguageDialog = false
+                                        L10n.setLanguage(context, option.index)
+                                        onApplyChanges()
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        RadioButton(selected = language == option.index, onClick = null)
+                                        Text(option.label, fontWeight = if (language == option.index) FontWeight.Bold else FontWeight.Normal)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showLanguageDialog = false }) {
+                            Text(L10n.t("Fechar", "Close", lang))
+                        }
+                    },
                 )
             }
 

@@ -1,6 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Data model:
+    // users/{uid}: private profile; only the owner can read or write.
+    // users/{uid}/games/{slug}: private playtime totals; only the owner can access.
+    // users/{uid}/reviews/{gameHash}: private ownership mapping and editable review.
+    // games/{gameHash}/reviews/{randomReviewId}: public rating/comment only, with
+    //   no email, username, or UID.
+
     function signedInAs(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
@@ -33,6 +40,31 @@ service cloud.firestore {
         && data.lastPlayedAt is timestamp;
     }
 
+    function validPrivateReview(data, gameHash) {
+      return gameHash.matches('^[a-f0-9]{64}$')
+        && data.keys().hasOnly(['reviewId', 'rating', 'comment', 'updatedAt'])
+        && data.keys().hasAll(['reviewId', 'rating', 'comment', 'updatedAt'])
+        && data.reviewId is string
+        && data.reviewId.matches('^[A-Za-z0-9]{20}$')
+        && data.rating is int
+        && data.rating >= 1
+        && data.rating <= 5
+        && data.comment is string
+        && data.comment.size() <= 500
+        && data.updatedAt is timestamp;
+    }
+
+    function validPublicReview(data) {
+      return data.keys().hasOnly(['rating', 'comment', 'updatedAt'])
+        && data.keys().hasAll(['rating', 'comment', 'updatedAt'])
+        && data.rating is int
+        && data.rating >= 1
+        && data.rating <= 5
+        && data.comment is string
+        && data.comment.size() <= 500
+        && data.updatedAt is timestamp;
+    }
+
     match /users/{userId} {
       allow get, list: if signedInAs(userId);
       allow create, update: if signedInAs(userId) && validProfile(request.resource.data);
@@ -43,6 +75,20 @@ service cloud.firestore {
         allow create, update: if signedInAs(userId) && validGameProgress(request.resource.data);
         allow delete: if false;
       }
+
+      match /reviews/{gameHash} {
+        allow get, list: if signedInAs(userId);
+        allow create, update: if signedInAs(userId) && validPrivateReview(request.resource.data, gameHash);
+        allow delete: if false;
+      }
+    }
+
+    match /games/{gameHash}/reviews/{reviewId} {
+      // The user explicitly requested that guests can read notes and reviews.
+      allow get, list: if true;
+      allow create, update: if request.auth != null
+        && validPublicReview(request.resource.data);
+      allow delete: if false;
     }
 
     match /{document=**} {

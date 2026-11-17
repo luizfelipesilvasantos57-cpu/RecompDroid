@@ -5,7 +5,7 @@ if (file("google-services.json").exists()) {
 }
 android {
     namespace = "com.recompdroid"; compileSdk = 35
-    defaultConfig { applicationId = "com.recompdroid"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.0.2" }
+    defaultConfig { applicationId = "com.recompdroid"; minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "0.0.3" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
@@ -29,4 +29,5 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.mlkit:translate:17.0.3")
 }
