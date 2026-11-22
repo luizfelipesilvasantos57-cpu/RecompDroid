@@ -73,6 +73,9 @@ object PortRegistry {
         val defaultPackageName: String? = null,
         val console: String = "Nintendo 64",
         val notes: String? = null,
+        val languages: String = "Português (PT-BR) & Inglês",
+        val portVersion: String = "v1.0+",
+        val portType: String = "Recompilação de Console",
     )
 
     private val knownPorts = mapOf(
@@ -83,6 +86,9 @@ object PortRegistry {
             defaultPackageName = "com.shipwright.soh",
             console = "Nintendo 64",
             notes = "Ship of Harkinian (Ocarina of Time)",
+            languages = "Português (PT-BR), Inglês, Espanhol",
+            portVersion = "v7.2.0+",
+            portType = "Recompilação Nativa (N64)",
         ),
         "2ship2harkinian" to PortInfo(
             repo = "Waterdish/2ship2harkinian-Android",
@@ -90,6 +96,9 @@ object PortRegistry {
             defaultPackageName = "com.shipwright.twoship",
             console = "Nintendo 64",
             notes = "2 Ship 2 Harkinian (Majora's Mask)",
+            languages = "Português (PT-BR), Inglês, Multilíngue",
+            portVersion = "v2.1.0+",
+            portType = "Recompilação Nativa (N64)",
         ),
         "ghostship" to PortInfo(
             repo = "retired64/sm64cdpy.releases",
@@ -97,6 +106,9 @@ object PortRegistry {
             defaultPackageName = "com.retired64.sm64cdpy",
             console = "Nintendo 64",
             notes = "Super Mario 64 Native Recomp",
+            languages = "Português (PT-BR), Inglês",
+            portVersion = "v1.4.0+",
+            portType = "Recompilação Nativa (N64)",
         ),
         "banjorecomp" to PortInfo(
             repo = "Waterdish/Banjo-Kazooie-Recompiled-Android",
@@ -104,6 +116,9 @@ object PortRegistry {
             defaultPackageName = "com.recomp.banjo",
             console = "Nintendo 64",
             notes = "Banjo-Kazooie: Recompiled",
+            languages = "Inglês (PT-BR via ROM)",
+            portVersion = "v1.0.0+",
+            portType = "Recompilação Nativa (N64)",
         ),
         "spaghettikart" to PortInfo(
             repo = "Waterdish/mk64-android",
@@ -111,6 +126,9 @@ object PortRegistry {
             defaultPackageName = "com.spaghetti.kart64",
             console = "Nintendo 64",
             notes = "SpaghettiKart (Mario Kart 64)",
+            languages = "Inglês, Multilíngue",
+            portVersion = "v1.1.0+",
+            portType = "Recompilação Nativa (N64)",
         ),
         "zelda64recomp" to PortInfo(
             repo = "Zelda64Recomp/Zelda64Recomp",
@@ -118,6 +136,9 @@ object PortRegistry {
             defaultPackageName = "com.zelda64.recomp",
             console = "Nintendo 64",
             notes = "Zelda 64 Recomp (OoT & MM)",
+            languages = "Português, Inglês",
+            portVersion = "v1.0.0+",
+            portType = "Recompilação Nativa (N64)",
         ),
 
         // PlayStation (PS1)
@@ -127,6 +148,9 @@ object PortRegistry {
             defaultPackageName = "com.unchiga.yfm",
             console = "PlayStation",
             notes = "Yu-Gi-Oh! Forbidden Memories Recompiled",
+            languages = "Português (PT-BR Oficial), Inglês, Espanhol",
+            portVersion = "v1.2.0+",
+            portType = "Recompilação Nativa (PS1)",
         ),
 
         // PlayStation 2 (PS2)
@@ -136,6 +160,9 @@ object PortRegistry {
             defaultPackageName = "local.dmc3.runtimeprobe",
             console = "PlayStation 2",
             notes = "Devil May Cry 3 Recompilation",
+            languages = "Português (Legendas), Inglês",
+            portVersion = "v0.9.5+",
+            portType = "Recompilação Nativa (PS2)",
         ),
 
         // PlayStation Vita (PS Vita)
@@ -145,6 +172,9 @@ object PortRegistry {
             defaultPackageName = "org.vita3k.emulator",
             console = "PS Vita",
             notes = "Vita3K Native Recomp Core",
+            languages = "Multilíngue (Português, Inglês, etc.)",
+            portVersion = "v0.2.0+",
+            portType = "Emulador / Core Runtime (PS Vita)",
         ),
 
         // Sega Dreamcast
@@ -154,6 +184,9 @@ object PortRegistry {
             defaultPackageName = "com.flyinghead.flycast",
             console = "Dreamcast",
             notes = "Flycast Native Dreamcast",
+            languages = "Multilíngue",
+            portVersion = "v2.4.0+",
+            portType = "Emulador / Core Runtime (Dreamcast)",
         ),
 
         // Nintendo DS
@@ -163,6 +196,9 @@ object PortRegistry {
             defaultPackageName = "me.magnum.melonds",
             console = "Nintendo DS",
             notes = "melonDS Native Core",
+            languages = "Multilíngue",
+            portVersion = "v0.9.5+",
+            portType = "Emulador / Core Runtime (DS)",
         ),
 
         // Original Xbox / PC
@@ -172,6 +208,9 @@ object PortRegistry {
             defaultPackageName = "is.xyz.omw",
             console = "Original Xbox",
             notes = "The Elder Scrolls III: Morrowind (OpenMW)",
+            languages = "Português (Mod), Inglês",
+            portVersion = "v0.48.0+",
+            portType = "Port de Engine Nativo",
         ),
 
         // PC / Classic Engines
@@ -181,6 +220,9 @@ object PortRegistry {
             defaultPackageName = "org.diasurgical.devilutionx",
             console = "PC / Consoles",
             notes = "DevilutionX (Diablo 1 + Hellfire)",
+            languages = "Português (PT-BR Completo), Inglês, Espanhol",
+            portVersion = "v1.5.0+",
+            portType = "Port de Engine Nativo",
         ),
         "fallout1-ce" to PortInfo(
             repo = "alexbatalov/fallout1-ce",
@@ -188,6 +230,9 @@ object PortRegistry {
             defaultPackageName = "com.alexbatalov.fallout1ce",
             console = "PC / Consoles",
             notes = "Fallout 1 Community Edition",
+            languages = "Português (Tradução externa), Inglês",
+            portVersion = "v1.2.0+",
+            portType = "Port de Engine Nativo",
         ),
         "fallout2-ce" to PortInfo(
             repo = "alexbatalov/fallout2-ce",
@@ -195,6 +240,9 @@ object PortRegistry {
             defaultPackageName = "com.alexbatalov.fallout2ce",
             console = "PC / Consoles",
             notes = "Fallout 2 Community Edition",
+            languages = "Português (Tradução externa), Inglês",
+            portVersion = "v1.2.0+",
+            portType = "Port de Engine Nativo",
         ),
         "com-n0n3m4-diii4a" to PortInfo(
             repo = "glKarin/com.n0n3m4.diii4a",
@@ -202,6 +250,9 @@ object PortRegistry {
             defaultPackageName = "com.n0n3m4.diii4a",
             console = "PC / Consoles",
             notes = "idTech4A++ (DOOM 3 / Quake 4)",
+            languages = "Inglês, Multilíngue",
+            portVersion = "v2.0.0+",
+            portType = "Port de Engine Nativo",
         ),
     )
 
@@ -234,6 +285,16 @@ object PortRegistry {
             t.contains("zelda") -> knownPorts["zelda64recomp"]
             else -> null
         }
+    }
+
+    fun findPortByPackage(pkgName: String): Pair<String, PortInfo>? {
+        val clean = pkgName.lowercase().trim()
+        for ((slug, info) in knownPorts) {
+            if (info.defaultPackageName?.lowercase()?.trim() == clean) {
+                return slug to info
+            }
+        }
+        return null
     }
 }
 

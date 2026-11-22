@@ -12,3 +12,4 @@ Release date: February 2025
 - 🧹 **Automatic APK Cleanup**: Automatically deletes temporary APK residue files 10 seconds after launching installation.
 - 🔙 **Navigation Back Handling**: Standard system back button navigation stack across views and tabs.
 - 🎮 **Console Filters & Sorting**: Platform/console filters in the Installed tab and sorting options across all views (Discover, Platforms, Installed).
+- 🏷️ **Port Technical Details**: Detailed info for each port indicating supported console/origin, port type, supported languages, and port version.

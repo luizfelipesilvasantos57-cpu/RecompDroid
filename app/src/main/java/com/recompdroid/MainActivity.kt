@@ -26,6 +26,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -81,6 +82,7 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -358,71 +360,88 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(store.lastSeenReleaseNotesVersion != currentReleaseVersion)
         }
 
-        val apkPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-        ) { uri ->
-            if (uri != null) {
-                scope.launch {
-                    runCatching {
-                        val inputStream = context.contentResolver.openInputStream(uri)
-                        val fileName = "custom_${System.currentTimeMillis()}.apk"
-                        val destFile = File(context.cacheDir, "apks/$fileName").apply { parentFile?.mkdirs() }
-                        inputStream?.use { input ->
-                            destFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        val pkg = context.packageManager.getPackageArchiveInfo(destFile.path, 0)?.packageName
-                            ?: "com.recomp.custom_${System.currentTimeMillis()}"
-                        val slug = destFile.nameWithoutExtension.lowercase().replace(Regex("[^a-z0-9]"), "").ifBlank { "custom_game" }
-                        store.save(slug, "custom", pkg)
-                        rev++
+        data class InstalledAppItem(
+            val packageName: String,
+            val appName: String,
+            val slug: String,
+            var isSelected: Boolean,
+        )
 
-                        Toast.makeText(
-                            context,
-                            L10n.t("Recomp adicionado à biblioteca!", "Recomp added to library!", lang),
-                            Toast.LENGTH_SHORT,
-                        ).show()
+        var showAppPickerModal by remember { mutableStateOf(false) }
+        var appPickerList by remember { mutableStateOf<List<InstalledAppItem>>(emptyList()) }
+        var showDetectedAppsModal by remember { mutableStateOf(false) }
+        var detectedAppsList by remember { mutableStateOf<List<InstalledAppItem>>(emptyList()) }
 
-                        val fileUri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", destFile)
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW)
-                                .setDataAndType(fileUri, "application/vnd.android.package-archive")
-                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
+        fun openDeviceAppPicker() {
+            val pm = context.packageManager
+            val installedPackages = runCatching { pm.getInstalledPackages(0) }.getOrNull().orEmpty()
+            val list = mutableListOf<InstalledAppItem>()
+            val excluded = setOf("com.android.vending", "com.google.android.gms", "com.google.android.googlequicksearchbox", context.packageName)
+            for (pkgInfo in installedPackages) {
+                val pkgName = pkgInfo.packageName
+                if (pkgName in excluded) continue
+                val appInfo = pkgInfo.applicationInfo ?: continue
+                val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                val isUpdatedSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                if (isSystem && !isUpdatedSystem) continue
+                val launchIntent = pm.getLaunchIntentForPackage(pkgName)
+                if (launchIntent == null && !pkgName.startsWith("com.recomp.")) continue
 
-                        scope.launch {
-                            kotlinx.coroutines.delay(10000)
-                            runCatching { destFile.delete() }
-                        }
-                    }.onFailure { ex ->
-                        Toast.makeText(context, "Erro ao importar APK: ${ex.message}", Toast.LENGTH_LONG).show()
-                    }
+                val appName = appInfo.loadLabel(pm)?.toString() ?: pkgName
+                val portMatch = PortRegistry.findPortByPackage(pkgName)
+                val slug = portMatch?.first ?: pkgName.substringAfterLast('.').lowercase().ifBlank { "app_${pkgName.hashCode()}" }
+                if (store.tag(slug) == null) {
+                    list.add(InstalledAppItem(pkgName, appName, slug, isSelected = false))
                 }
             }
+            appPickerList = list.sortedBy { it.appName.lowercase() }
+            showAppPickerModal = true
         }
 
         fun detectDeviceRecomps() {
             val pm = context.packageManager
             val installedPackages = runCatching { pm.getInstalledPackages(0) }.getOrNull().orEmpty()
-            var addedCount = 0
+            var autoAddedCount = 0
+            val candidates = mutableListOf<InstalledAppItem>()
+            val excluded = setOf("com.android.vending", "com.google.android.gms", "com.google.android.googlequicksearchbox", context.packageName)
+
             for (pkgInfo in installedPackages) {
                 val pkgName = pkgInfo.packageName
-                if (pkgName.startsWith("com.recomp.") || pkgName.contains("recomp") || pkgName.contains("port") || pkgName.contains("sm64") || pkgName.contains("zelda")) {
-                    val slug = pkgName.substringAfterLast('.').lowercase().ifBlank { "detected_game" }
+                if (pkgName in excluded) continue
+                val appInfo = pkgInfo.applicationInfo ?: continue
+                val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                val isUpdatedSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                if (isSystem && !isUpdatedSystem) continue
+
+                val appName = appInfo.loadLabel(pm)?.toString() ?: pkgName
+                val portMatch = PortRegistry.findPortByPackage(pkgName)
+                val isRecompPattern = pkgName.startsWith("com.recomp.") || pkgName.contains("recomp", ignoreCase = true) || pkgName.contains("port", ignoreCase = true) || pkgName.contains("sm64", ignoreCase = true) || pkgName.contains("zelda", ignoreCase = true)
+
+                if (portMatch != null) {
+                    val slug = portMatch.first
                     if (store.tag(slug) == null) {
-                        store.save(slug, "detected", pkgName)
-                        addedCount++
+                        store.save(slug, "auto_detected", pkgName)
+                        autoAddedCount++
+                    }
+                } else if (isRecompPattern) {
+                    val slug = pkgName.substringAfterLast('.').lowercase().ifBlank { "app_${pkgName.hashCode()}" }
+                    if (store.tag(slug) == null) {
+                        candidates.add(InstalledAppItem(pkgName, appName, slug, isSelected = true))
                     }
                 }
             }
             rev++
-            Toast.makeText(
-                context,
-                if (addedCount > 0) L10n.t("$addedCount recomps detectados no dispositivo!", "$addedCount recomps detected on device!", lang)
-                else L10n.t("Nenhum novo recomp detectado.", "No new recomps detected.", lang),
-                Toast.LENGTH_SHORT,
-            ).show()
+            if (candidates.isNotEmpty()) {
+                detectedAppsList = candidates
+                showDetectedAppsModal = true
+            } else {
+                Toast.makeText(
+                    context,
+                    if (autoAddedCount > 0) L10n.t("$autoAddedCount recomps registrados adicionados automaticamente!", "$autoAddedCount registered recomps automatically added!", lang)
+                    else L10n.t("Nenhum novo recomp adicional detectado no dispositivo.", "No new additional recomps detected on device.", lang),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
 
         fun dismissReleaseNotes() {
@@ -774,6 +793,94 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        if (showAppPickerModal || showDetectedAppsModal) {
+            val isDetected = showDetectedAppsModal
+            val currentList = if (isDetected) detectedAppsList else appPickerList
+            var mutableListState by remember(currentList) { mutableStateOf(currentList) }
+
+            AlertDialog(
+                onDismissRequest = {
+                    showAppPickerModal = false
+                    showDetectedAppsModal = false
+                },
+                title = { Text(if (isDetected) L10n.t("Recomps detectados no dispositivo", "Recomps detected on device", lang) else L10n.t("Escolher aplicativo do celular", "Choose app from device", lang), fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (mutableListState.isEmpty()) {
+                            Text(L10n.t("Nenhum aplicativo disponível.", "No available apps.", lang))
+                        } else {
+                            Text(
+                                L10n.t("Selecione quais apps deseja adicionar à biblioteca:", "Select which apps you want to add to your library:", lang),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            mutableListState.forEachIndexed { index, item ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val updated = mutableListState.toMutableList()
+                                            updated[index] = item.copy(isSelected = !item.isSelected)
+                                            mutableListState = updated
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Checkbox(
+                                        checked = item.isSelected,
+                                        onCheckedChange = { checked ->
+                                            val updated = mutableListState.toMutableList()
+                                            updated[index] = item.copy(isSelected = checked)
+                                            mutableListState = updated
+                                        },
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(item.appName, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(item.packageName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val selected = mutableListState.filter { item -> item.isSelected }
+                            for (app in selected) {
+                                store.save(app.slug, "device_app", app.packageName)
+                            }
+                            rev++
+                            showAppPickerModal = false
+                            showDetectedAppsModal = false
+                            Toast.makeText(
+                                context,
+                                L10n.t("${selected.size} apps adicionados à biblioteca!", "${selected.size} apps added to library!", lang),
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                    ) {
+                        Text(L10n.t("Adicionar selecionados", "Add selected", lang))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showAppPickerModal = false
+                        showDetectedAppsModal = false
+                    }) {
+                        Text(L10n.t("Cancelar", "Cancel", lang))
+                    }
+                },
+            )
+        }
+
         selectedGame?.let { g ->
             Detail(
                 g = g,
@@ -935,14 +1042,35 @@ class MainActivity : ComponentActivity() {
                     )
                     else -> {
                         val installedSet = remember(rev) { store.installed().toSet() }
+                        val catalogSlugs = games.map { it.slug }.toSet()
+                        val customInstalledGames = installedSet.filter { it !in catalogSlugs }.map { slug ->
+                            val pkg = store.pkg(slug) ?: slug
+                            val title = slug.replace('_', ' ').replace('-', ' ').replaceFirstChar { it.uppercase() }
+                            Game(
+                                slug = slug,
+                                title = title,
+                                subtitle = "App do Dispositivo ($pkg)",
+                                description = "Aplicativo adicionado manualmente do dispositivo.",
+                                platform = "Android / Custom",
+                                repo = null,
+                                version = null,
+                            )
+                        }
+                        val allGames = games + customInstalledGames
 
                         // PC ports first, then newer consoles before older ones.
-                        val filteredList = games
+                        val filteredList = allGames
                             .filter { (slug, title, subtitle, _, platform) ->
                                 val matchesTab = if (tab == 2) slug in installedSet else true
                                 val matchesFav = if (onlyFavorites) store.isFavorite(slug) else true
-                                val matchesPlat = selectedPlatformFilter == null ||
-                                    platform?.let(::platformFilterGroup) == selectedPlatformFilter
+                                val matchesPlat = when (selectedPlatformFilter) {
+                                    null -> true
+                                    "Standalone" -> {
+                                        val portInfo = PortRegistry.findPort(slug, title)
+                                        portInfo != null && !portInfo.portType.contains("Emulador", ignoreCase = true)
+                                    }
+                                    else -> platform?.let(::platformFilterGroup) == selectedPlatformFilter
+                                }
                                 val matchesQuery = query.isBlank() || title.contains(query, ignoreCase = true) ||
                                         (subtitle?.contains(query, ignoreCase = true) == true)
 
@@ -988,13 +1116,13 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     OutlinedButton(
-                                        onClick = { apkPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*")) },
+                                        onClick = { openDeviceAppPicker() },
                                         modifier = Modifier.weight(1f),
                                         shape = RoundedCornerShape(12.dp),
                                     ) {
                                         Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text(L10n.t("Escolher APK", "Choose APK", lang), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text(L10n.t("Escolher App", "Choose App", lang), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     }
                                     OutlinedButton(
                                         onClick = { detectDeviceRecomps() },
@@ -1040,8 +1168,8 @@ class MainActivity : ComponentActivity() {
                                     val groups = games.mapNotNull { it.platform }
                                         .map(::platformFilterGroup)
                                         .toSet()
-                                    listOf("PC", "Nintendo", "PlayStation", "Sega", "Xbox", "Outros")
-                                        .filter { it in groups }
+                                    listOf("PC", "Nintendo", "PlayStation", "Sega", "Xbox", "Standalone", "Outros")
+                                        .filter { it in groups || it == "Standalone" }
                                 }
                                 LazyRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1073,6 +1201,7 @@ class MainActivity : ComponentActivity() {
                                                 Text(
                                                     when (platformGroup) {
                                                         "PC" -> L10n.t("PC", "PC", lang)
+                                                        "Standalone" -> L10n.t("Standalone", "Standalone", lang)
                                                         "Outros" -> L10n.t("Outros", "Other", lang)
                                                         else -> platformGroup
                                                     },
