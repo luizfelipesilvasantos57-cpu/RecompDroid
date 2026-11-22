@@ -354,11 +354,9 @@ class MainActivity : ComponentActivity() {
         val currentReleaseVersion = remember(context) {
             runCatching {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
-            }.getOrNull()?.takeIf { it.isNotBlank() } ?: "0.0.2"
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: "0.0.4"
         }
-        var showReleaseNotes by remember(store, currentReleaseVersion) {
-            mutableStateOf(store.lastSeenReleaseNotesVersion != currentReleaseVersion)
-        }
+        var showReleaseNotes by remember { mutableStateOf(true) }
 
         data class InstalledAppItem(
             val packageName: String,
@@ -572,11 +570,11 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(L10n.t("Novidades", "What's new", lang), fontWeight = FontWeight.Bold)
+                            Text(L10n.t("Novidades da Versão 0.0.4", "What's new in v0.0.4", lang), fontWeight = FontWeight.Bold)
                             Text(
-                                L10n.t("RecompDroid 0.0.3", "RecompDroid 0.0.3", lang),
+                                L10n.t("Versão de Testes (Beta)", "Test Version (Beta)", lang),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.colorScheme.error,
                             )
                         }
                     }
@@ -586,20 +584,28 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Text(
-                            L10n.t("De 0.0.2 para 0.0.3: desinstalação, avaliações e 10 novos idiomas.", "From 0.0.2 to 0.0.3: uninstall, reviews, and 10 new languages.", lang),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                text = L10n.t("⚠️ ATENÇÃO: A versão 0.0.4 é uma versão experimental de testes (Beta). Ocorrem atualizações frequentes e podem haver bugs ou instabilidades.", "⚠️ WARNING: Version 0.0.4 is an experimental test version (Beta). Frequent updates occur and bugs or instability may happen.", lang),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(10.dp),
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+
                         listOf(
-                            L10n.t("Desinstalar pelo app", "Uninstall from the app", lang) to
-                                L10n.t("Use o botão de desinstalação nas páginas dos jogos instalados; o Android pede confirmação antes de remover.", "Use the uninstall button on installed game pages; Android asks for confirmation before removal.", lang),
-                            L10n.t("Avaliações da comunidade", "Community ratings", lang) to
-                                L10n.t("Veja notas e comentários de outros jogadores. Usuários conectados podem publicar ou atualizar sua própria avaliação.", "Read player ratings and reviews. Signed-in users can post or update their own review.", lang),
-                            L10n.t("Mais idiomas", "More languages", lang) to
-                                L10n.t("Escolha entre português, inglês, espanhol, francês, alemão, italiano, japonês, coreano, chinês simplificado, russo, hindi e indonésio.", "Choose Portuguese, English, Spanish, French, German, Italian, Japanese, Korean, Simplified Chinese, Russian, Hindi, or Indonesian.", lang),
-                            L10n.t("Tradução local", "On-device translation", lang) to
-                                L10n.t("As traduções dos textos da interface são processadas no dispositivo pelo ML Kit. O modelo do idioma escolhido é baixado via Wi-Fi na primeira utilização.", "Interface text is translated on-device with ML Kit. The selected language model downloads over Wi-Fi the first time it is used.", lang),
+                            L10n.t("Filtro Standalone", "Standalone Filter", lang) to
+                                L10n.t("Filtre o catálogo para exibir exclusivamente versões nativas standalone e engine ports de recompilação.", "Filter the catalog to show exclusively standalone native and engine port recompilations.", lang),
+                            L10n.t("Escolher App do Celular", "Choose App from Device", lang) to
+                                L10n.t("Adicione aplicativos instalados diretamente do dispositivo à sua biblioteca com facilidade.", "Add installed apps directly from your device to your library with ease.", lang),
+                            L10n.t("Pull-to-Refresh & Auto-recarga", "Pull-to-Refresh & Auto-reload", lang) to
+                                L10n.t("Atualize a página puxando para baixo e veja os apps adicionados refletidos instantaneamente.", "Refresh the page by pulling down and see added apps reflected instantly.", lang),
+                            L10n.t("Desinstalação Segura & Limpeza", "Safe Uninstall & Cleanup", lang) to
+                                L10n.t("Diálogo de confirmação de desinstalação e remoção automática de arquivos APK residuais após o uso.", "Uninstall confirmation dialog and automatic removal of residual APK files after use.", lang),
                         ).forEach { (heading, description) ->
                             Row(
                                 verticalAlignment = Alignment.Top,
